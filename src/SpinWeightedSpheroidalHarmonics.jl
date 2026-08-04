@@ -7,6 +7,12 @@ include("spectral.jl")
 
 export spin_weighted_spheroidal_harmonic, spin_weighted_spherical_harmonic, spin_weighted_spheroidal_eigenvalue, spin_weighted_spherical_eigenvalue # Expose these functions to the user
 export Teukolsky_lambda_const # For backward compatbility
+export AngularCacheKey, AngularEigenpair, AngularPathResult
+export AngularContinuationError, AngularCache, DEFAULT_ANGULAR_CACHE
+export clear_angular_cache!, continue_angular_mode, track_angular_mode
+export continue_angular_lateral_pair, mirror_angular_parameters
+export angular_mirror_residual, angular_precision_certificate
+export angular_observables
 
 _TOLERANCE = 1e-16 # Spherical harmonics smaller than this will be ignored in the spectral decomposition
 
@@ -115,14 +121,28 @@ The `method` argument controls how the harmonic is evaluated:
 Method names are case-insensitive.
 """
 function spin_weighted_spheroidal_harmonic(s::Int, l::Int, m::Int, c; N::Int=-1, method="auto")
+    if c isa Complex && !iszero(imag(c))
+        pair = continue_angular_mode(
+            s, l, m, c;
+            truncation_order=N == -1 ? SWSH_DEFAULT_ANGULAR_ORDER :
+                N - (l - max(abs(m), abs(s)) + 1))
+        return spin_weighted_spheroidal_harmonic(pair; method)
+    end
+    adaptive_lambda = nothing
     if N == -1
-        N = _determine_matrix_size_N(s, l, m)
+        if c isa Real && !iszero(c)
+            adaptive_lambda = _adaptive_real_lambda(c, s, l, m)
+            N = adaptive_lambda.size
+        else
+            N = _determine_matrix_size_N(s, l, m)
+        end
     end
     method = _format_method_name(method)
     coefficients_params = SpectralDecompositionInputParams(s, l, m, c, N)
     angular_sep, coefficients = _spectral_decomposition(c, s, l, m, N)
     normalization = 1 # already satisfied the normalization cond. \int_{0}^{pi} [nf*S(theta)]^2 sin(theta) d theta = 1
-    lambda = angular_sep + c^2 - 2*m*c
+    lambda = adaptive_lambda === nothing ? angular_sep + c^2 - 2*m*c :
+        adaptive_lambda.value
 
     l_list = construct_all_l_in_matrix(coefficients_params.s, coefficients_params.m, coefficients_params.N)
     if method == "chebyshev"
@@ -212,9 +232,6 @@ The default value is `N=-1`, which indicates that a suitable value of `N` will b
 This function is simply a wrapper to `Teukolsky_lambda_const` for backward compatibility.
 """
 function spin_weighted_spheroidal_eigenvalue(s::Int, l::Int, m::Int, c; N::Int=-1)
-    if N == -1
-        N = _determine_matrix_size_N(s, l, m)
-    end
     Teukolsky_lambda_const(c, s, l, m, N)
 end
 
@@ -230,5 +247,7 @@ function spin_weighted_spherical_eigenvalue(s::Int, l::Int, m::Int=0)
     # Eigenvalue for the Schwarzschild case does not depend on m
     Teukolsky_lambda_const(0, s, l, m)
 end
+
+include("continuation.jl")
 
 end

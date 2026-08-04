@@ -1,4 +1,5 @@
 using SpinWeightedSpheroidalHarmonics
+using LinearAlgebra
 using Test
 
 function _theta_integral_abs2(swsh; n::Int=2001, phi=0.0)
@@ -162,6 +163,60 @@ end
         @test swsh.lambda ≈ spin_weighted_spheroidal_eigenvalue(s, l, m, c)
     end
 
+    @testset "Real eigenvalue fast path" begin
+        cases = [
+            (-2, 2, 2, 0.45),
+            (2, 2, -2, -1.0e-7),
+            (-2, 8, 0, 0.5),
+            (-2, 32, 0, 0.5),
+            (-2, 50, 0, 10.0),
+            (2, 50, -25, -0.99999),
+        ]
+
+        for (s, l, m, c) in cases
+            N = SpinWeightedSpheroidalHarmonics._determine_matrix_size_N(s, l, m)
+            reference, _ = SpinWeightedSpheroidalHarmonics._spectral_decomposition(c, s, l, m, N)
+            candidate = SpinWeightedSpheroidalHarmonics._angular_eigenvalue(c, s, l, m, N)
+            @test candidate ≈ reference rtol=5e-14 atol=2e-12
+        end
+    end
+
+    @testset "Adaptive high-c eigenvalue" begin
+        cases = [
+            (1, 2, -2, -0.99999, -0.03510321969441066),
+            (0, 2, 0, -9.9999, 54.50971251592067),
+            (1, 2, 0, -9.0, 47.5455735438706),
+            (2, 2, 0, -45.0, 87.01704710570348),
+            (1, 50, -50, -99.999, -143.41923491519816),
+        ]
+
+        for (s, l, m, c, reference) in cases
+            candidate = spin_weighted_spheroidal_eigenvalue(s, l, m, c)
+            @test isapprox(candidate, reference; rtol=3e-14, atol=5e-13)
+        end
+    end
+
+    @testset "Small-c eigenvalue" begin
+        cases = [
+            (-2, 2, 0, -1.0e-7, 4.0000000000000047619047619047605),
+            (2, 2, -2, 1.0e-6, 6.66666693121699e-6),
+            (1, 50, 0, -9.9999e-8, 2548.0),
+            (-1, 50, 0, -9.9999e-8, 2550.0),
+        ]
+
+        for (s, l, m, c, reference) in cases
+            candidate = spin_weighted_spheroidal_eigenvalue(s, l, m, c)
+            @test isapprox(candidate, reference; rtol=0, atol=1e-18)
+        end
+
+        inside = SpinWeightedSpheroidalHarmonics._adaptive_real_lambda(
+            1.0e-6, -2, 2, 0)
+        outside = SpinWeightedSpheroidalHarmonics._adaptive_real_lambda(
+            nextfloat(1.0e-6), -2, 2, 0)
+        @test inside.refinement == 0
+        @test outside.refinement > 0
+    end
+
     @testset "Spherical limit (c = 0)" begin
         s = -2
         l = 6
@@ -169,5 +224,112 @@ end
         spheroidal = spin_weighted_spheroidal_harmonic(s, l, m, 0.0; method="direct")
         spherical = spin_weighted_spherical_harmonic(s, l, m; method="direct")
         @test spheroidal(1.1, 0.7) ≈ spherical(1.1, 0.7) rtol=1e-12 atol=1e-12
+    end
+
+    @testset "Signed-frequency angular cache" begin
+        cache = AngularCache(max_entries=8)
+        positive = continue_angular_mode(
+            -2, 3, 2, 0.4 + 0.15im; cache)
+        negative = continue_angular_mode(
+            -2, 3, 2, -0.4 + 0.15im; cache)
+        @test positive.c != negative.c
+        @test positive.lambda != negative.lambda
+        @test length(cache.values) == 2
+        repeated = continue_angular_mode(
+            -2, 3, 2, 0.4 + 0.15im; cache)
+        @test repeated === positive
+    end
+
+    @testset "Complex angular continuation" begin
+        path = ComplexF64[
+            0.0,
+            0.15 - 0.05im,
+            0.30 - 0.10im,
+            0.45 - 0.20im,
+        ]
+        result = track_angular_mode(
+            -2, 4, 2, path;
+            sheet_id=:test_path, truncation_order=24)
+        @test result.status == :open
+        @test last(result.states).c == last(path)
+        @test all(state.residual <= 5e-12 for state in result.states)
+        @test all(state.previous_overlap >= 0.65
+            for state in Iterators.drop(result.states, 1))
+        @test all(abs(imag(dot(
+                result.states[index - 1].coefficients,
+                result.states[index].coefficients))) <= 5e-13
+            for index in 2:length(result.states))
+    end
+
+    @testset "Independent lateral sheets and mirror" begin
+        lateral = continue_angular_lateral_pair(
+            -2, 3, 1, 0.7, 0.4, 1e-4;
+            truncation_order=24)
+        right = last(lateral.right.states)
+        left = last(lateral.left.states)
+        @test right.sheet_id == :right_lateral
+        @test left.sheet_id == :left_lateral
+        @test real(right.c) == -real(left.c)
+        @test imag(right.c) == imag(left.c)
+
+        pair = continue_angular_mode(
+            -2, 3, 1, 0.35 - 0.2im;
+            sheet_id=:mirror_source, truncation_order=24,
+            cache=nothing)
+        mirrored_parameters = mirror_angular_parameters(
+            pair.s, pair.l, pair.m, pair.c)
+        mirrored = continue_angular_mode(
+            mirrored_parameters.s, mirrored_parameters.l,
+            mirrored_parameters.m, mirrored_parameters.c;
+            sheet_id=:mirror_target, truncation_order=24,
+            cache=nothing)
+        @test angular_mirror_residual(pair, mirrored) <= 2e-12
+    end
+
+    @testset "Angular monodromy and observables" begin
+        loop = ComplexF64[
+            0.0,
+            0.15,
+            0.15 + 0.1im,
+            0.0 + 0.1im,
+            0.0,
+        ]
+        result = track_angular_mode(
+            -2, 2, 2, loop;
+            sheet_id=:closed_test, truncation_order=24)
+        @test result.status == :closed
+        @test result.lambda_closure_error <= 1e-12
+        @test abs(abs(result.monodromy_overlap) - 1) <= 1e-10
+
+        pair = continue_angular_mode(
+            -2, 3, 2, 0.25 - 0.15im;
+            sheet_id=:observable_test, truncation_order=24,
+            cache=nothing)
+        public_lambda = spin_weighted_spheroidal_eigenvalue(
+            pair.s, pair.l, pair.m, pair.c;
+            N=pair.matrix_size)
+        public_harmonic = spin_weighted_spheroidal_harmonic(
+            pair.s, pair.l, pair.m, pair.c;
+            N=pair.matrix_size, method="auto")
+        @test public_lambda ≈ pair.lambda rtol=2e-13 atol=2e-13
+        @test public_harmonic.lambda ≈ pair.lambda rtol=2e-13 atol=2e-13
+        observables = angular_observables(
+            pair, 1.1, 0.3; derivative_order=2)
+        @test public_harmonic(1.1, 0.3) ≈ observables.value
+        @test isfinite(observables.value)
+        @test isfinite(observables.first_derivative)
+        @test isfinite(observables.second_derivative)
+        @test observables.lambda == pair.lambda
+    end
+
+    @testset "Angular precision and truncation certificate" begin
+        certificate = angular_precision_certificate(
+            -2, 2, 2, 0.2 - 0.1im;
+            truncation_orders=(24, 32),
+            precision_bits=(128, 160))
+        @test certificate.accepted
+        @test certificate.truncation_drift <= 1e-12
+        @test certificate.precision_drift <= 1e-14
+        @test certificate.eigenvector_overlap >= 1 - 1e-10
     end
 end
