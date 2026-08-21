@@ -12,8 +12,6 @@ struct AngularCacheKey{T<:AbstractFloat}
     m::Int
     c::Complex{T}
     sheet_id::Symbol
-    normalization::Symbol
-    derivative_order::Int
     precision_bits::Int
     truncation_order::Int
 end
@@ -415,9 +413,6 @@ function track_angular_mode(
     overlap_margin_min::Real=SWSH_DEFAULT_OVERLAP_MARGIN_MIN,
     residual_tol::Real=SWSH_DEFAULT_RESIDUAL_TOL,
 )
-    abs(m) <= l || throw(ArgumentError("m must satisfy abs(m) <= l."))
-    l >= max(abs(m), abs(s)) ||
-        throw(ArgumentError("l is outside the angular basis."))
     path = ComplexF64.(collect(requested_path))
     isempty(path) && throw(ArgumentError("requested_path must not be empty."))
     first(path) == 0 || pushfirst!(path, 0.0 + 0.0im)
@@ -471,16 +466,13 @@ function continue_angular_mode(
     c;
     sheet_id::Symbol=:straight_from_spherical,
     truncation_order::Int=SWSH_DEFAULT_ANGULAR_ORDER,
-    derivative_order::Int=0,
-    normalization::Symbol=:parallel_transport,
     cache::Union{AngularCache,Nothing}=DEFAULT_ANGULAR_CACHE,
     kwargs...,
 )
     _require_binary64_angular_input(c)
     c64 = ComplexF64(c)
     key = AngularCacheKey(
-        s, l, m, c64, sheet_id, normalization, derivative_order,
-        53, truncation_order)
+        s, l, m, c64, sheet_id, 53, truncation_order)
     if cache !== nothing
         cached = _angular_cache_get(cache, key)
         cached === nothing || return cached

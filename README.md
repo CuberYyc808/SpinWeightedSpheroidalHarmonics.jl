@@ -66,6 +66,29 @@ swsh = spin_weighted_spheroidal_harmonic(s, l, m, a*omega)
 swsh.spherical_harmonics_l, swsh.coeffs
 ```
 
+### Selected-eigenpair backend
+
+For real spheroidicity, the default `backend=:auto` computes only the requested
+banded spectral eigenpair. It adaptively increases the spherical-harmonic
+truncation until the eigenvalue drift, eigenvector overlap, coefficient tail,
+and angular-equation residual all pass. The resulting coefficients are used
+directly for the harmonic and its exact angular derivatives, so a full dense
+eigendecomposition is not required.
+
+```julia
+fast = spin_weighted_spheroidal_harmonic(
+    -2, 2, 2, 0.35; backend=:fast_selected)
+dense = spin_weighted_spheroidal_harmonic(
+    -2, 2, 2, 0.35; backend=:dense_reference)
+
+fast(pi / 3, 0.0)
+fast(pi / 3, 0.0; theta_derivative=1)
+```
+
+`backend=:dense_reference` retains the previous dense route for regression
+checks. Complex spheroidicity continues to use angular mode continuation; the
+real-symmetric banded solver is not applied to that problem.
+
 ## How to cite
 If you have used this code in your research that leads to a publication, please cite the following article:
 ```

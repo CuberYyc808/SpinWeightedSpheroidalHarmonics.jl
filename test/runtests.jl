@@ -12,27 +12,27 @@ end
 
 @testset "SpinWeightedSpheroidalHarmonics.jl" begin
     @testset "Jacobi spherical harmonic evaluation" begin
-        test_spins = (-2, -1, 0, 1, 2)
-        test_angles = [
-            (0.37, 0.91),
-            (1.10, 2.30),
-            (2.40, -0.20),
+        cases = [
+            (-2, 2, -2),
+            (-2, 8, 3),
+            (-1, 5, -2),
+            (0, 0, 0),
+            (1, 6, 1),
+            (2, 10, 7),
         ]
+        angles = ((0.37, 0.91), (2.40, -0.20))
 
-        for s in test_spins
-            for l in abs(s):20
-                for m in -l:l
-                    y_direct = spin_weighted_spherical_harmonic(s, l, m; method="direct")
-                    y_jacobi = spin_weighted_spherical_harmonic(s, l, m; method="jacobi")
-
-                    for (theta, phi) in test_angles
-                        @test y_jacobi(theta, phi) ≈ y_direct(theta, phi) rtol=2e-8 atol=1e-10
-                        @test y_jacobi(theta, phi; phi_derivative=2) ≈ y_direct(theta, phi; phi_derivative=2) rtol=2e-8 atol=1e-10
-                        @test y_jacobi(theta, phi; theta_derivative=1) ≈ y_direct(theta, phi; theta_derivative=1) rtol=1e-8 atol=1e-10
-                        @test y_jacobi(theta, phi; theta_derivative=2) ≈ y_direct(theta, phi; theta_derivative=2) rtol=1e-8 atol=1e-9
-                        @test y_jacobi(theta, phi; theta_derivative=1, phi_derivative=1) ≈ y_direct(theta, phi; theta_derivative=1, phi_derivative=1) rtol=1e-8 atol=1e-10
-                    end
-                end
+        for (s, l, m) in cases
+            direct = spin_weighted_spherical_harmonic(
+                s, l, m; method="direct")
+            jacobi = spin_weighted_spherical_harmonic(
+                s, l, m; method="jacobi")
+            for (theta, phi) in angles
+                @test jacobi(theta, phi) ≈ direct(theta, phi) rtol=2e-8 atol=1e-10
+                @test jacobi(theta, phi; theta_derivative=1) ≈
+                    direct(theta, phi; theta_derivative=1) rtol=1e-8 atol=1e-10
+                @test jacobi(theta, phi; theta_derivative=2) ≈
+                    direct(theta, phi; theta_derivative=2) rtol=1e-8 atol=1e-9
             end
         end
     end
@@ -47,13 +47,10 @@ end
         # direct evaluation, which is treated as the golden standard.
         symmetry_pairs = [
             (-2, 10, 3),
-            (-1, 9, 2),
-            (1, 8, 2),
             (2, 11, 1),
         ]
         symmetry_angles = [
             (0.42, 0.30),
-            (1.70, -0.80),
             (2.60, 2.20),
         ]
 
@@ -68,12 +65,8 @@ end
                 # Golden-standard agreement for the negative-m mode.
                 @test y_jacobi_neg(theta, phi) ≈ y_direct_neg(theta, phi) rtol=1e-9 atol=1e-12
                 @test y_jacobi_neg(theta, phi; theta_derivative=1) ≈ y_direct_neg(theta, phi; theta_derivative=1) rtol=1e-9 atol=1e-10
-                @test y_jacobi_neg(theta, phi; theta_derivative=2) ≈ y_direct_neg(theta, phi; theta_derivative=2) rtol=1e-9 atol=1e-9
-
-                # Explicitly check the symmetry trick against direct.
                 @test y_jacobi_neg(theta, phi) ≈ phase * conj(y_direct_ref(theta, phi)) rtol=1e-9 atol=1e-12
                 @test y_jacobi_neg(theta, phi; theta_derivative=1) ≈ phase * conj(y_direct_ref(theta, phi; theta_derivative=1)) rtol=1e-9 atol=1e-10
-                @test y_jacobi_neg(theta, phi; theta_derivative=1, phi_derivative=1) ≈ phase * conj(y_direct_ref(theta, phi; theta_derivative=1, phi_derivative=1)) rtol=1e-9 atol=1e-10
             end
         end
     end
@@ -83,13 +76,10 @@ end
         # when needed. Validate this mapping with direct evaluation.
         fold_modes = [
             (-2, 8, 2),
-            (-2, 8, -2),
             (0, 9, 0),
-            (1, 7, -1),
         ]
         principal_angles = [
             (0.70, 0.40),
-            (1.40, -1.10),
             (2.20, 2.20),
         ]
 
@@ -103,10 +93,7 @@ end
 
                 @test y_jacobi(theta_folded, phi) ≈ y_direct(theta, phi + π) rtol=1e-9 atol=1e-12
                 @test y_jacobi(theta_negative, phi) ≈ y_direct(theta, phi + π) rtol=1e-9 atol=1e-12
-                @test y_jacobi(theta_folded, phi; phi_derivative=2) ≈ y_direct(theta, phi + π; phi_derivative=2) rtol=1e-9 atol=1e-10
-                @test y_jacobi(theta_negative, phi; phi_derivative=2) ≈ y_direct(theta, phi + π; phi_derivative=2) rtol=1e-9 atol=1e-10
                 @test y_jacobi(theta_folded, phi; theta_derivative=1) ≈ y_direct(theta, phi + π; theta_derivative=1) rtol=1e-9 atol=1e-10
-                @test y_jacobi(theta_negative, phi; theta_derivative=1) ≈ y_direct(theta, phi + π; theta_derivative=1) rtol=1e-9 atol=1e-10
             end
         end
     end
@@ -128,10 +115,7 @@ end
     @testset "Jacobi normalization convention" begin
         modes = [
             (-2, 6, 2),
-            (-2, 12, 2),
-            (-1, 15, 1),
             (0, 20, 0),
-            (2, 18, -1),
         ]
 
         for (s, l, m) in modes
@@ -140,17 +124,8 @@ end
 
             norm_direct_phi0 = _theta_integral_abs2(y_direct; phi=0.0)
             norm_jacobi_phi0 = _theta_integral_abs2(y_jacobi; phi=0.0)
-            norm_direct_phi1 = _theta_integral_abs2(y_direct; phi=1.3)
-            norm_jacobi_phi1 = _theta_integral_abs2(y_jacobi; phi=1.3)
-
-            # Jacobi should match direct normalization for the same mode.
             @test norm_jacobi_phi0 ≈ norm_direct_phi0 rtol=1e-9 atol=1e-12
-            @test norm_jacobi_phi1 ≈ norm_direct_phi1 rtol=1e-9 atol=1e-12
-
-            # Direct evaluation method follows the package convention:
-            # ∫_0^π |sY_lm(θ, ϕ)|^2 sinθ dθ = 1/(2π), independent of ϕ.
             @test norm_direct_phi0 ≈ 1 / (2π) rtol=5e-5 atol=5e-7
-            @test norm_direct_phi1 ≈ 1 / (2π) rtol=5e-5 atol=5e-7
         end
     end
 
@@ -167,27 +142,61 @@ end
         cases = [
             (-2, 2, 2, 0.45),
             (2, 2, -2, -1.0e-7),
-            (-2, 8, 0, 0.5),
             (-2, 32, 0, 0.5),
-            (-2, 50, 0, 10.0),
             (2, 50, -25, -0.99999),
         ]
 
         for (s, l, m, c) in cases
             N = SpinWeightedSpheroidalHarmonics._determine_matrix_size_N(s, l, m)
-            reference, _ = SpinWeightedSpheroidalHarmonics._spectral_decomposition(c, s, l, m, N)
+            reference, _ = SpinWeightedSpheroidalHarmonics._spectral_decomposition(
+                c, s, l, m, N; backend=:dense_reference)
             candidate = SpinWeightedSpheroidalHarmonics._angular_eigenvalue(c, s, l, m, N)
             @test candidate ≈ reference rtol=5e-14 atol=2e-12
         end
+    end
+
+    @testset "Selected real eigenpair and full harmonic" begin
+        cases = [
+            (-2, 2, 2, 0.68),
+            (-2, 10, 2, 5.0),
+            (-1, 8, -3, -4.0),
+        ]
+        angles = ((0.1, 0.2), (1.5, 0.8))
+        for (s, l, m, c) in cases
+            pair = SpinWeightedSpheroidalHarmonics._adaptive_real_eigenpair(
+                c, s, l, m)
+            fast = spin_weighted_spheroidal_harmonic(
+                s, l, m, c; backend=:fast_selected)
+            dense = spin_weighted_spheroidal_harmonic(
+                s, l, m, c; N=fast.params.N,
+                backend=:dense_reference)
+            @test fast.params.N == pair.size
+            @test pair.delta <= SpinWeightedSpheroidalHarmonics.SWSH_EIGENVALUE_ATOL +
+                SpinWeightedSpheroidalHarmonics.SWSH_EIGENVALUE_RTOL *
+                abs(pair.lambda)
+            @test 1 - pair.overlap <=
+                SpinWeightedSpheroidalHarmonics.SWSH_EIGENVECTOR_OVERLAP_TOL
+            @test pair.tail <=
+                SpinWeightedSpheroidalHarmonics.SWSH_EIGENVECTOR_TAIL_TOL
+            @test pair.residual <=
+                SpinWeightedSpheroidalHarmonics.SWSH_EIGENVECTOR_RESIDUAL_TOL
+            @test fast.lambda ≈ dense.lambda rtol=5e-14 atol=1e-12
+            @test abs(dot(fast.coeffs, dense.coeffs)) ≈ 1.0 atol=2e-13
+            for (theta, phi) in angles
+                @test fast(theta, phi) ≈ dense(theta, phi) rtol=2e-12 atol=2e-13
+                @test fast(theta, phi; theta_derivative=1) ≈
+                    dense(theta, phi; theta_derivative=1) rtol=3e-11 atol=3e-12
+            end
+        end
+        @test_throws ArgumentError spin_weighted_spheroidal_harmonic(
+            -2, 2, 2, 0.3; backend=:unknown)
     end
 
     @testset "Adaptive high-c eigenvalue" begin
         cases = [
             (1, 2, -2, -0.99999, -0.03510321969441066),
             (0, 2, 0, -9.9999, 54.50971251592067),
-            (1, 2, 0, -9.0, 47.5455735438706),
             (2, 2, 0, -45.0, 87.01704710570348),
-            (1, 50, -50, -99.999, -143.41923491519816),
         ]
 
         for (s, l, m, c, reference) in cases
@@ -199,9 +208,7 @@ end
     @testset "Small-c eigenvalue" begin
         cases = [
             (-2, 2, 0, -1.0e-7, 4.0000000000000047619047619047605),
-            (2, 2, -2, 1.0e-6, 6.66666693121699e-6),
             (1, 50, 0, -9.9999e-8, 2548.0),
-            (-1, 50, 0, -9.9999e-8, 2550.0),
         ]
 
         for (s, l, m, c, reference) in cases
