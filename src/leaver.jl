@@ -437,16 +437,24 @@ end
 Fit `f` on [0, π] with a Chebyshev series of fixed length, doubling the length
 until its tail has decayed. Evaluating the Leaver series involves cancellations
 that leave a roundoff floor, and letting ApproxFun construct the Fun adaptively
-would make it refine against that floor forever instead of stopping.
+would make it refine against that floor forever instead of stopping. So the doubling
+also stops once the tail no longer falls (by at least a factor of 4) and lies within a
+factor of 100 of `floor`, the estimated roundoff of the values of `f` relative to the
+largest one (see _leaver_series_accuracy): it has reached that floor, and the longer
+of the two fits is kept. (A tail that has not started to fall yet, as for a harmonic of
+large index at small n, is far above the floor.)
 =#
-function _leaver_chebyshev_fit(f, ::Type{T}; n_start::Int=64, n_max::Int=4096) where {T}
+function _leaver_chebyshev_fit(f, ::Type{T}, floor; n_start::Int=64, n_max::Int=4096) where {T}
     space = Chebyshev(zero(T)..T(π))
     n = n_start
+    previous_tail = T(Inf)
     while true
         coefficients = transform(space, f.(points(space, n)))
         rtol = 100 * eps(real(eltype(coefficients)))
-        tail = maximum(abs, @view coefficients[end-n÷8:end])
-        (tail <= rtol * maximum(abs, coefficients) || n >= n_max) && return Fun(space, coefficients)
+        tail = maximum(abs, @view coefficients[end-n÷8:end]) / maximum(abs, coefficients)
+        (tail <= rtol || (tail <= 100floor && tail > previous_tail / 4) || n >= n_max) &&
+            return Fun(space, coefficients)
+        previous_tail = tail
         n *= 2
     end
 end
@@ -455,7 +463,8 @@ function _leaver_theta_fun(sol::LeaverAngularSolution)
     fun = @atomic sol.theta_fun
     if isnothing(fun)
         # Concurrent first calls may both build the fit; the first stored value is kept and returned to both.
-        built = _leaver_chebyshev_fit(theta -> _leaver_raw_theta_value(sol, theta), _leaver_real_type(sol))
+        built = _leaver_chebyshev_fit(theta -> _leaver_raw_theta_value(sol, theta), _leaver_real_type(sol),
+            _leaver_series_accuracy(sol))
         old, _ = @atomicreplace sol.theta_fun nothing => built
         fun = isnothing(old) ? built : old
     end
@@ -476,13 +485,14 @@ keep the natural Leaver convention `a_0 = 1`.
 """
 function _leaver_normalization_const(sol::LeaverAngularSolution, s::Int, l, m::Int)
     T = _leaver_real_type(sol)
-    theta_integral = sum(_leaver_chebyshev_fit(theta -> abs2(_leaver_raw_theta_value(sol, theta)) * sin(theta), T))
+    floor = _leaver_series_accuracy(sol)
+    theta_integral = sum(_leaver_chebyshev_fit(theta -> abs2(_leaver_raw_theta_value(sol, theta)) * sin(theta), T, floor))
     theta_integral <= 0 && error("Could not normalize the Leaver spheroidal harmonic: the norm is non-positive.")
     magnitude = sqrt(2T(π) * theta_integral)
 
     if l isa Integer && l >= max(abs(s), abs(m))
         spherical = spin_weighted_spherical_harmonic(s, Int(l), m; precision=_precision_keyword(_precision_bits(T)))
-        overlap = sum(_leaver_chebyshev_fit(theta -> conj(spherical(theta, zero(T))) * _leaver_raw_theta_value(sol, theta) * sin(theta), T))
+        overlap = sum(_leaver_chebyshev_fit(theta -> conj(spherical(theta, zero(T))) * _leaver_raw_theta_value(sol, theta) * sin(theta), T, floor))
         # |overlap| is bounded by sqrt(theta_integral/(2π)); bail out of fixing
         # the phase if this mode happens to have essentially no overlap with sYlm
         if abs(overlap) > 1e-3 * sqrt(theta_integral / (2T(π)))
