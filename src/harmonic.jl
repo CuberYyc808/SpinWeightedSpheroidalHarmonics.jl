@@ -215,18 +215,33 @@ function _differentiate_jacobi_terms(terms::Dict{NTuple{5, Int}, Float64})
     return dterms
 end
 
-function _spin_weighted_spherical_harmonic_jacobi_theta_derivative_nonnegative_m(s::Int, l::Int, m::Int, theta, theta_derivative::Int)
-    m < 0 && error("Jacobi theta-derivative core expects m >= 0")
-    theta_derivative < 0 && error("theta_derivative must be non-negative")
-
+# The theta-derivative of the m >= 0 Jacobi core as a list of terms coeff * sin(theta/2)^a * cos(theta/2)^b * P_n^(p,q)(cos theta),
+# kept in the iteration order of the Dict that produced it (the evaluation sums in this order).
+function _jacobi_theta_terms(s::Int, l::Int, m::Int, theta_derivative::Int)
     p = m + s
     q = m - s
     n = l - m
-
     terms = Dict{NTuple{5, Int}, Float64}((n, p, q, p, q) => 1.0)
     for _ in 1:theta_derivative
         terms = _differentiate_jacobi_terms(terms)
     end
+    return collect(terms)
+end
+
+# The first and second theta-derivative term lists of a Jacobi-method harmonic, for the core parameters it evaluates
+# (negative m is evaluated through the reflection (s, m) -> (-s, -m)).
+function _jacobi_theta_derivative_terms(s::Int, l::Int, m::Int)
+    ss, mm = m < 0 ? (-s, -m) : (s, m)
+    return (_jacobi_theta_terms(ss, l, mm, 1), _jacobi_theta_terms(ss, l, mm, 2))
+end
+
+function _spin_weighted_spherical_harmonic_jacobi_theta_derivative_nonnegative_m(s::Int, l::Int, m::Int, theta, theta_derivative::Int;
+        prepared_terms=nothing)
+    m < 0 && error("Jacobi theta-derivative core expects m >= 0")
+    theta_derivative < 0 && error("theta_derivative must be non-negative")
+
+    terms = prepared_terms !== nothing && theta_derivative in (1, 2) ? prepared_terms[theta_derivative] :
+        _jacobi_theta_terms(s, l, m, theta_derivative)
 
     x = cos(theta)
     st2 = sin(theta / 2)
@@ -267,7 +282,8 @@ function _spin_weighted_spherical_harmonic_jacobi_value(s::Int, l::Int, m::Int, 
     return (-1)^(s - m) * conj(reflected)
 end
 
-function _nth_derivative_spherical_harmonic_jacobi(s::Int, l::Int, m::Int, theta_derivative::Int, phi_derivative::Int, theta, phi)
+function _nth_derivative_spherical_harmonic_jacobi(s::Int, l::Int, m::Int, theta_derivative::Int, phi_derivative::Int, theta, phi;
+        prepared_terms=nothing)
     theta_derivative < 0 && error("theta_derivative must be non-negative")
     phi_derivative < 0 && error("phi_derivative must be non-negative")
 
@@ -281,7 +297,8 @@ function _nth_derivative_spherical_harmonic_jacobi(s::Int, l::Int, m::Int, theta
     end
 
     if m < 0
-        reflected = _nth_derivative_spherical_harmonic_jacobi(-s, l, -m, theta_derivative, phi_derivative, _theta, _phi)
+        reflected = _nth_derivative_spherical_harmonic_jacobi(-s, l, -m, theta_derivative, phi_derivative, _theta, _phi;
+            prepared_terms)
         return (-1)^(s - m) * conj(reflected)
     end
 
@@ -295,7 +312,8 @@ function _nth_derivative_spherical_harmonic_jacobi(s::Int, l::Int, m::Int, theta
         return _nth_derivative_spherical_harmonic_direct_eval(s, l, m, theta_derivative, phi_derivative, _theta, _phi)
     end
 
-    theta_part = _spin_weighted_spherical_harmonic_jacobi_theta_derivative_nonnegative_m(s, l, m, _theta, theta_derivative)
+    theta_part = _spin_weighted_spherical_harmonic_jacobi_theta_derivative_nonnegative_m(s, l, m, _theta, theta_derivative;
+        prepared_terms)
     return theta_part * cis(m * _phi) * (m * 1im)^phi_derivative
 end
 

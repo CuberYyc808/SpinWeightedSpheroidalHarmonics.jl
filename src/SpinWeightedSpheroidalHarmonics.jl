@@ -31,7 +31,11 @@ struct SpinWeightedSphericalHarmonicFunction
     lambda
     method::Symbol
     chebyshev_solution
+    jacobi_theta_terms::Union{Nothing, NTuple{2, Vector{Pair{NTuple{5, Int}, Float64}}}} # first and second theta-derivative term lists (Jacobi method), built once with the harmonic
 end
+
+SpinWeightedSphericalHarmonicFunction(s, l, m, lambda, method, chebyshev_solution) =
+    SpinWeightedSphericalHarmonicFunction(s, l, m, lambda, method, chebyshev_solution, nothing)
 
 # Implement pretty printing for SpinWeightedSphericalHarmonicFunction
 function Base.show(io::IO, ::MIME"text/plain", swsh_func::SpinWeightedSphericalHarmonicFunction)
@@ -278,7 +282,8 @@ function spin_weighted_spherical_harmonic(s::Int, l::Int, m::Int; method="auto")
         chebyshev_soln = _solve_spherical_harmonic_chebyshev(s, l, m)
         return SpinWeightedSphericalHarmonicFunction(s, l, m, spin_weighted_spherical_eigenvalue(s, l, m), :chebyshev, chebyshev_soln)
     elseif method == "jacobi"
-        return SpinWeightedSphericalHarmonicFunction(s, l, m, spin_weighted_spherical_eigenvalue(s, l, m), :jacobi, nothing)
+        return SpinWeightedSphericalHarmonicFunction(s, l, m, spin_weighted_spherical_eigenvalue(s, l, m), :jacobi, nothing,
+            _jacobi_theta_derivative_terms(s, l, m))
     else
         error("Method $method is not available for spin-weighted spherical harmonics. Supported values are auto, direct, chebyshev, jacobi (case-insensitive).")
     end
@@ -296,7 +301,8 @@ Additionally compute the `theta_derivative`-th derivative with respect to `theta
     elseif swsh_func.method == :chebyshev
         return _nth_derivative_spheroidal_harmonic_chebyshev(swsh_func.chebyshev_solution, swsh_func.m, theta_derivative, phi_derivative, theta, phi)
     elseif swsh_func.method == :jacobi
-        return _nth_derivative_spherical_harmonic_jacobi(swsh_func.s, swsh_func.l, swsh_func.m, theta_derivative, phi_derivative, theta, phi)
+        return _nth_derivative_spherical_harmonic_jacobi(swsh_func.s, swsh_func.l, swsh_func.m, theta_derivative, phi_derivative, theta, phi;
+            prepared_terms=swsh_func.jacobi_theta_terms)
     else
         error("Unknown method $(swsh_func.method) for evaluating spin-weighted spherical harmonic.")
     end
