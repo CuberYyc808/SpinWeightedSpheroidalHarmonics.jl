@@ -27,7 +27,7 @@ mutable struct LeaverAngularSolution
     pminus::Int # |m - s|, so that u^{k₋} = cos(θ/2)^pminus
     pplus::Int  # |m + s|, so that (1 - u)^{k₊} = sin(θ/2)^pplus
     coeffs      # series coefficients a_n, normalized to a_0 = 1
-    theta_fun   # Chebyshev representation of the unnormalized S(θ), built on demand for θ-derivatives
+    @atomic theta_fun # Chebyshev representation of the unnormalized S(θ), built on demand for θ-derivatives (atomic: shared solutions may be differentiated from several threads)
 end
 
 _LEAVER_TINY = 1e-30 # Continued-fraction denominators smaller than this are nudged away from zero
@@ -443,10 +443,14 @@ function _leaver_chebyshev_fit(f; n_start::Int=64, n_max::Int=4096)
 end
 
 function _leaver_theta_fun(sol::LeaverAngularSolution)
-    if isnothing(sol.theta_fun)
-        sol.theta_fun = _leaver_chebyshev_fit(theta -> _leaver_raw_theta_value(sol, theta))
+    fun = @atomic sol.theta_fun
+    if isnothing(fun)
+        # Concurrent first calls may both build the fit; the first stored value is kept and returned to both.
+        built = _leaver_chebyshev_fit(theta -> _leaver_raw_theta_value(sol, theta))
+        old, _ = @atomicreplace sol.theta_fun nothing => built
+        fun = isnothing(old) ? built : old
     end
-    return sol.theta_fun
+    return fun
 end
 
 @doc raw"""
