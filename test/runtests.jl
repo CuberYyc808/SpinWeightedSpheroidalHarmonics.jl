@@ -195,7 +195,7 @@ end
         @test isfinite(spin_weighted_spheroidal_harmonic(
             -2, 2, 2, -10.0; backend=:dense)(1.1, 0.3))
         pair = continue_angular_mode(-2, 3, 2, 0.4+0.15im; cache=nothing)
-        @test SWSH.SWSH_EIGENVECTOR_GAP_TOL <= pair.spectral_gap < Inf
+        @test SWSH._eigenvector_gap_tol(Float64) <= pair.spectral_gap < Inf
     end
 
     @testset "Default matrix size" begin
@@ -439,3 +439,6 @@ end
         end
     end
 end
+
+include("precision.jl")
+include("threads.jl")

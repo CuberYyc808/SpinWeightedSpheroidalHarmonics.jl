@@ -91,6 +91,7 @@ This is a composite struct type that stores the output from [`spin_weighted_sphe
 | `lambda` | spin-weighted spheroidal eigenvalue $\lambda$ |
 | `chebyshev_solution` | numerical solution expressed in Chebyshev polynomials, when solved with the `chebyshev` method |
 | `leaver_solution` | Leaver's power-series solution, when solved with the `leaver` method |
+| `precision` | the `BigFloat` precision the harmonic was built with, at which it is evaluated (`0` for `Float64`); the type parameter is the floating-point type it was built in |
 
 #### SpinWeightedSphericalHarmonicFunction
 This is a composite struct type that stores information about a spin-weighted spherical harmonic
@@ -108,3 +109,6 @@ This is a composite struct type that stores information about a spin-weighted sp
 | `lambda` | spin-weighted spherical eigenvalue $\lambda$ |
 | `method` | the method used to solve for the harmonic |
 | `chebyshev_solution` | numerical solution expressed in Chebyshev polynomials |
+| `jacobi_theta_terms` | the first and second theta-derivative terms, when evaluated with the `jacobi` method |
+| `direct_terms` | the prepared terms of the direct sum, when evaluated with the `direct` method |
+| `precision` | the `BigFloat` precision the harmonic was built with, at which it is evaluated (`0` for `Float64`); the type parameter is the floating-point type it was built in |

@@ -90,6 +90,18 @@ banded(pi / 3, 0.0)
 banded(pi / 3, 0.0; theta_derivative=1)
 ```
 
+## Arbitrary precision and threads
+Every function computes in the floating-point type of its input: `Float64` by default, `BigFloat`
+at any precision for `BigFloat` input or with the keyword `precision`. A harmonic built in `BigFloat`
+evaluates at the precision it was built with. Harmonics, eigenvalues and continued modes can be
+computed and evaluated from several threads at once.
+
+```julia
+spin_weighted_spheroidal_eigenvalue(-2, 2, 2, 7//20; precision=256)   # 7/20 to 256 bits
+S = spin_weighted_spheroidal_harmonic(-2, 2, 2, 7//20; precision=256)
+S(big(11) / 10, 0)
+```
+
 ## How to cite
 If you have used this code in your research that leads to a publication, please cite the following article:
 ```

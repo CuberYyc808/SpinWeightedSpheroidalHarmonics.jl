@@ -2,6 +2,7 @@ module SpinWeightedSpheroidalHarmonics
 
 using LinearAlgebra
 
+include("Precision.jl")
 include("harmonic.jl")
 include("spectral.jl")
 include("continuation.jl")
@@ -16,7 +17,13 @@ export continue_angular_lateral_pair, mirror_angular_parameters
 export angular_mirror_residual, angular_precision_certificate
 export angular_observables
 
-_TOLERANCE = 1e-16 # Spherical harmonics smaller than this will be ignored in the spectral decomposition
+# Spherical-harmonic coefficients smaller than this are ignored in the spectral decomposition
+_spherical_coefficient_tol(::Type{T}) where {T} = _tol(T, 1e-16)
+
+# c (or another input) in the working type T
+_to_float(::Type{T}, x::Real) where {T} = T(x)
+_to_float(::Type{T}, x::Complex) where {T} = Complex{T}(x)
+_to_float(::Type, ::Nothing) = nothing
 
 function _format_method_name(method)
     normalized = lowercase(strip(String(method)))
@@ -24,18 +31,19 @@ function _format_method_name(method)
     error("Does not understand method $method. Supported values are auto, direct, chebyshev, jacobi, leaver (case-insensitive).")
 end
 
-struct SpinWeightedSphericalHarmonicFunction
+# T is the floating-point type the harmonic was built in; evaluation runs in the wider of T and the
+# type of the angles, at the BigFloat precision the harmonic was built with (0 when T carries it)
+struct SpinWeightedSphericalHarmonicFunction{T<:AbstractFloat}
     s::Int
     l::Int
     m::Int
     lambda
     method::Symbol
     chebyshev_solution
-    jacobi_theta_terms::Union{Nothing, NTuple{2, Vector{Pair{NTuple{5, Int}, Float64}}}} # first and second theta-derivative term lists (Jacobi method), built once with the harmonic
+    jacobi_theta_terms::Union{Nothing, NTuple{2, Vector{Pair{NTuple{5, Int}, Float64}}}} # first and second theta-derivative term lists (Jacobi method), built once with the harmonic; the coefficients are exact
+    direct_terms::Union{Nothing, DirectSumTerms{T}} # the prepared direct sum (direct method)
+    precision::Int
 end
-
-SpinWeightedSphericalHarmonicFunction(s, l, m, lambda, method, chebyshev_solution) =
-    SpinWeightedSphericalHarmonicFunction(s, l, m, lambda, method, chebyshev_solution, nothing)
 
 # Implement pretty printing for SpinWeightedSphericalHarmonicFunction
 function Base.show(io::IO, ::MIME"text/plain", swsh_func::SpinWeightedSphericalHarmonicFunction)
@@ -50,7 +58,7 @@ struct SpectralDecompositionInputParams
     N::Int
 end
 
-struct SpinWeightedSpheroidalHarmonicFunction
+struct SpinWeightedSpheroidalHarmonicFunction{T<:AbstractFloat}
     params::SpectralDecompositionInputParams
     coeffs
     spherical_harmonics_l::Vector{Union{SpinWeightedSphericalHarmonicFunction, Nothing}}
@@ -59,26 +67,34 @@ struct SpinWeightedSpheroidalHarmonicFunction
     method::Symbol
     chebyshev_solution
     leaver_solution
+    precision::Int
 end
 
-# Harmonics not built by Leaver's method have no Leaver solution
-SpinWeightedSpheroidalHarmonicFunction(params, coeffs, spherical_harmonics_l, normalization_const,
-        lambda, method, chebyshev_solution) =
-    SpinWeightedSpheroidalHarmonicFunction(params, coeffs, spherical_harmonics_l,
-        normalization_const, lambda, method, chebyshev_solution, nothing)
+#=
+Evaluate f at the angles converted to the evaluation type: the wider of the type T the harmonic was
+built in and the type of the angles, at the precision the harmonic was built with (or that of the
+angles, if wider), whatever precision the caller has set.
+=#
+function _evaluate_at(f, ::Type{T}, built_precision::Int, theta, phi) where {T}
+    R = _float_type(zero(T), theta, phi)
+    return _with_precision(R, max(built_precision, _input_precision(theta, phi))) do
+        f(R(theta), R(phi))
+    end
+end
 
 # Implement pretty printing for SpinWeightedSpheroidalHarmonicFunction
 function Base.show(io::IO, ::MIME"text/plain", swsh_func::SpinWeightedSpheroidalHarmonicFunction)
     print(io, "SpinWeightedSpheroidalHarmonicFunction(s = $(swsh_func.params.s), l = $(swsh_func.params.l), m = $(swsh_func.params.m), c = $(swsh_func.params.c), method = $(swsh_func.method), lambda = $(swsh_func.lambda))")
 end
 
-function _unnormalized_spin_weighted_spheroidal_harmonic(coefficients_params, coefficients, spherical_harmonics_l, theta, phi; theta_derivative::Int=0, phi_derivative::Int=0)
+function _unnormalized_spin_weighted_spheroidal_harmonic(::Type{T}, coefficients_params, coefficients, spherical_harmonics_l, theta, phi; theta_derivative::Int=0, phi_derivative::Int=0) where {T}
     # Compute the spin-weighted spherical harmonics needed
-    output = 0.0
+    output = zero(theta)
     l_list = construct_all_l_in_matrix(coefficients_params.s, coefficients_params.m, coefficients_params.N)
 
     for (idx, _) in enumerate(l_list)
-        if abs(coefficients[idx]) < _TOLERANCE
+        # the harmonics whose coefficients are below the cutoff were left out when the harmonic was built
+        if spherical_harmonics_l[idx] === nothing
             continue
         end
         output += coefficients[idx] * spherical_harmonics_l[idx](theta, phi; theta_derivative=theta_derivative, phi_derivative=phi_derivative)
@@ -87,7 +103,7 @@ function _unnormalized_spin_weighted_spheroidal_harmonic(coefficients_params, co
 end
 
 # S and dS/dtheta at theta = π/2, from the spectral decomposition
-function _spheroidal_equator_values(coefficients_params, coefficients)
+function _spheroidal_equator_values(::Type{T}, coefficients_params, coefficients) where {T}
     s = coefficients_params.s
     m = coefficients_params.m
     l_list = construct_all_l_in_matrix(s, m, coefficients_params.N)
@@ -96,14 +112,14 @@ function _spheroidal_equator_values(coefficients_params, coefficients)
     dS_half = zero(eltype(coefficients))
 
     for idx in eachindex(l_list)
-        if abs(coefficients[idx]) < _TOLERANCE
+        if abs(coefficients[idx]) < _spherical_coefficient_tol(T)
             continue
         end
 
         l = l_list[idx]
         # Evaluate sYlm(\pi/2, 0) using a numerically stable method
-        Ypi2 = Float64(spin_weighted_spherical_harmonic_at_pi_over_2(s, l, m))
-        dYpi2 = real(spin_weighted_spherical_harmonic(s, l, m)(π / 2, 0.0; theta_derivative=1))
+        Ypi2 = _spherical_harmonic_at_pi_over_2(T, s, l, m)
+        dYpi2 = real(spin_weighted_spherical_harmonic(s, l, m)(T(π) / 2, zero(T); theta_derivative=1))
 
         S_half += coefficients[idx] * Ypi2
         dS_half += coefficients[idx] * dYpi2
@@ -129,7 +145,7 @@ function _resolve_spheroidal_method(method, s::Int, l, m::Int)
 end
 
 @doc raw"""
-    spin_weighted_spheroidal_harmonic(s::Int, l, m::Int, c; N::Int=-1, method="auto", backend="auto", branch_n=nothing, lambda=nothing, lambda0=nothing, cf_depth::Int=-1, tol=-1, max_iter::Int=80)
+    spin_weighted_spheroidal_harmonic(s::Int, l, m::Int, c; N::Int=-1, method="auto", backend="auto", branch_n=nothing, lambda=nothing, lambda0=nothing, cf_depth::Int=-1, tol=-1, max_iter::Int=80, precision=nothing)
 
 Construct the spin-weighted spheroidal harmonic of
 spin weight `s`, harmonic index `l`, azimuthal index `m`, and spheroidicity `c` ($c = a\omega$).
@@ -183,14 +199,30 @@ Backend names are case-insensitive.
 For complex `c`, "mode `l`" is the mode that connects continuously to the spherical harmonic `l`
 along the straight path from `c = 0`. To follow a different path, use `track_angular_mode` and pass
 a returned eigenpair to `spin_weighted_spheroidal_harmonic`.
+
+Every method computes in the floating-point type of `c` (at least Float64; for `"leaver"` also of
+`lambda` and `lambda0`). With `precision = p`, `c` is converted to BigFloat at `p` bits and the
+harmonic is computed and evaluated at that precision. A harmonic built in BigFloat remembers its
+precision: it evaluates at that precision whatever precision is in effect when it is called.
 """
 function spin_weighted_spheroidal_harmonic(s::Int, l, m::Int, c;
         N::Int=-1, method="auto", backend="auto",
         branch_n::Union{Nothing, Int}=nothing, lambda=nothing, lambda0=nothing,
-        cf_depth::Int=-1, tol=-1, max_iter::Int=80)
+        cf_depth::Int=-1, tol=-1, max_iter::Int=80, precision::Union{Nothing, Integer}=nothing)
 
     method = _resolve_spheroidal_method(method, s, l, m)
+    _check_precision_keyword(precision)
+    c, lambda, lambda0 = (_with_precision_keyword(x, precision) for x in (c, lambda, lambda0))
+    T = method == "leaver" ? _float_type(c, filter(!isnothing, (lambda, lambda0))...) : _float_type(c)
+    bits = precision === nothing ? _input_precision(c, lambda, lambda0) : precision
+    return _with_precision(T, bits) do
+        _spin_weighted_spheroidal_harmonic(T, bits, s, l, m, _to_float(T, c), method, N, backend,
+            branch_n, lambda, lambda0, cf_depth, tol, max_iter)
+    end
+end
 
+function _spin_weighted_spheroidal_harmonic(::Type{T}, bits::Int, s::Int, l, m::Int, c, method, N, backend,
+        branch_n, lambda, lambda0, cf_depth, tol, max_iter) where {T}
     if method == "leaver"
         _spectral_backend(backend) == :auto || throw(ArgumentError(
             "backend=$backend selects a spectral-decomposition solver, which method=\"leaver\" does not use."))
@@ -199,7 +231,7 @@ function spin_weighted_spheroidal_harmonic(s::Int, l, m::Int, c;
         leaver_solution = _leaver_angular_solution(s, m, c, lambda; branch_n=branch, nmax=N)
         normalization = _leaver_normalization_const(leaver_solution, s, l, m)
         coefficients_params = SpectralDecompositionInputParams(s, l, m, c, length(leaver_solution.coeffs))
-        return SpinWeightedSpheroidalHarmonicFunction(coefficients_params, leaver_solution.coeffs, Vector{Union{SpinWeightedSphericalHarmonicFunction, Nothing}}(), normalization, lambda, :leaver, nothing, leaver_solution)
+        return SpinWeightedSpheroidalHarmonicFunction{T}(coefficients_params, leaver_solution.coeffs, Vector{Union{SpinWeightedSphericalHarmonicFunction, Nothing}}(), normalization, lambda, :leaver, nothing, leaver_solution, bits)
     end
 
     selected_backend = _resolve_spectral_backend(backend, c)
@@ -213,8 +245,8 @@ function spin_weighted_spheroidal_harmonic(s::Int, l, m::Int, c;
         adaptive_pair = _adaptive_real_eigenpair(real(c), s, l, m)
     end
     angular_sep, coefficients = if adaptive_pair !== nothing
-        shift = muladd(Float64(real(c)), Float64(real(c)),
-            -2m * Float64(real(c)))
+        shift = muladd(T(real(c)), T(real(c)),
+            -2m * T(real(c)))
         adaptive_pair.lambda - shift, adaptive_pair.coefficients
     else
         # With N = -1, the backend picks the size, so N is read off the result
@@ -227,14 +259,14 @@ function spin_weighted_spheroidal_harmonic(s::Int, l, m::Int, c;
 
     l_list = construct_all_l_in_matrix(coefficients_params.s, coefficients_params.m, coefficients_params.N)
     if method == "chebyshev"
-        S_half, dS_half = _spheroidal_equator_values(coefficients_params, coefficients)
-        chebyshev_solution = _solve_spheroidal_harmonic_chebyshev(s, l, m, c, angular_sep, S_half, dS_half)
+        S_half, dS_half = _spheroidal_equator_values(T, coefficients_params, coefficients)
+        chebyshev_solution = _solve_spheroidal_harmonic_chebyshev(T, s, l, m, c, angular_sep, S_half, dS_half)
         spherical_harmonics_l = Vector{Union{SpinWeightedSphericalHarmonicFunction, Nothing}}(undef, length(l_list))
         fill!(spherical_harmonics_l, nothing)
-        return SpinWeightedSpheroidalHarmonicFunction(coefficients_params, coefficients, spherical_harmonics_l, normalization, lambda, :chebyshev, chebyshev_solution, nothing)
+        return SpinWeightedSpheroidalHarmonicFunction{T}(coefficients_params, coefficients, spherical_harmonics_l, normalization, lambda, :chebyshev, chebyshev_solution, nothing, bits)
     else
-        spherical_harmonics_l = [ abs(coefficients[n]) >= _TOLERANCE ? spin_weighted_spherical_harmonic(s, l_list[n], m; method=method) : nothing for n in eachindex(l_list) ]
-        return SpinWeightedSpheroidalHarmonicFunction(coefficients_params, coefficients, spherical_harmonics_l, normalization, lambda, :spectral, nothing, nothing)
+        spherical_harmonics_l = [ abs(coefficients[n]) >= _spherical_coefficient_tol(T) ? spin_weighted_spherical_harmonic(s, l_list[n], m; method, precision=_precision_keyword(bits)) : nothing for n in eachindex(l_list) ]
+        return SpinWeightedSpheroidalHarmonicFunction{T}(coefficients_params, coefficients, spherical_harmonics_l, normalization, lambda, :spectral, nothing, nothing, bits)
     end
 end
 
@@ -244,9 +276,10 @@ end
 Compute the value of the spin-weighted spheroidal harmonic at the point `(theta, phi)`. 
 Additionally compute the `theta_derivative`-th derivative with respect to `theta` and the `phi_derivative`-th derivative with respect to `phi` exactly.
 """
-(swsh_func::SpinWeightedSpheroidalHarmonicFunction)(theta, phi; theta_derivative::Int=0, phi_derivative::Int=0) = begin
+(swsh_func::SpinWeightedSpheroidalHarmonicFunction{T})(theta, phi; theta_derivative::Int=0, phi_derivative::Int=0) where {T} =
+    _evaluate_at(T, swsh_func.precision, theta, phi) do theta, phi
     if swsh_func.method == :spectral
-        return _unnormalized_spin_weighted_spheroidal_harmonic(swsh_func.params, swsh_func.coeffs, swsh_func.spherical_harmonics_l, theta, phi; theta_derivative=theta_derivative, phi_derivative=phi_derivative) / swsh_func.normalization_const
+        return _unnormalized_spin_weighted_spheroidal_harmonic(T, swsh_func.params, swsh_func.coeffs, swsh_func.spherical_harmonics_l, theta, phi; theta_derivative=theta_derivative, phi_derivative=phi_derivative) / swsh_func.normalization_const
     elseif swsh_func.method == :chebyshev
         return _nth_derivative_spheroidal_harmonic_chebyshev(swsh_func.chebyshev_solution, swsh_func.params.m, theta_derivative, phi_derivative, theta, phi) / swsh_func.normalization_const
     elseif swsh_func.method == :leaver
@@ -257,7 +290,7 @@ Additionally compute the `theta_derivative`-th derivative with respect to `theta
 end
 
 @doc raw"""
-    spin_weighted_spherical_harmonic(s::Int, l::Int, m::Int; method="auto")
+    spin_weighted_spherical_harmonic(s::Int, l::Int, m::Int; method="auto", precision=nothing)
 
 Construct the spin-weighted spherical harmonic of 
 spin weight `s`, harmonic index `l`, and azimuthal index `m`.
@@ -269,21 +302,31 @@ When `l < 30`, the direct evaluation method (`method="direct"`) is used where we
 When `l >= 30`, we use a Jacobi polynomial recurrence (`method="jacobi"`) for better high-`l` stability and speed (see https://arxiv.org/abs/2208.03691).
 The Chebyshev pseudo-spectral method (`method="chebyshev"`) remains available as an explicit option.
 Method names are case-insensitive.
+
+The harmonic is evaluated in the floating-point type of the angles (at least Float64). With
+`precision = p` it is built and evaluated in BigFloat at `p` bits, whatever precision is in effect
+when it is called.
 """
-function spin_weighted_spherical_harmonic(s::Int, l::Int, m::Int; method="auto")
+function spin_weighted_spherical_harmonic(s::Int, l::Int, m::Int; method="auto",
+        precision::Union{Nothing, Integer}=nothing)
     method = _format_method_name(method)
     if method == "auto"
         method = l >= 30 ? "jacobi" : "direct"
     end
+    _check_precision_keyword(precision)
+    T = precision === nothing ? Float64 : BigFloat
+    bits = precision === nothing ? 0 : Int(precision)
+    lambda = spin_weighted_spherical_eigenvalue(s, l, m)
 
     if method == "direct"
-        return SpinWeightedSphericalHarmonicFunction(s, l, m, spin_weighted_spherical_eigenvalue(s, l, m), :direct, nothing)
+        direct_terms = _with_precision(() -> DirectSumTerms(T, s, l, m), T, bits)
+        return SpinWeightedSphericalHarmonicFunction{T}(s, l, m, lambda, :direct, nothing, nothing, direct_terms, bits)
     elseif method == "chebyshev"
-        chebyshev_soln = _solve_spherical_harmonic_chebyshev(s, l, m)
-        return SpinWeightedSphericalHarmonicFunction(s, l, m, spin_weighted_spherical_eigenvalue(s, l, m), :chebyshev, chebyshev_soln)
+        chebyshev_soln = _with_precision(() -> _solve_spherical_harmonic_chebyshev(T, s, l, m), T, bits)
+        return SpinWeightedSphericalHarmonicFunction{T}(s, l, m, lambda, :chebyshev, chebyshev_soln, nothing, nothing, bits)
     elseif method == "jacobi"
-        return SpinWeightedSphericalHarmonicFunction(s, l, m, spin_weighted_spherical_eigenvalue(s, l, m), :jacobi, nothing,
-            _jacobi_theta_derivative_terms(s, l, m))
+        return SpinWeightedSphericalHarmonicFunction{T}(s, l, m, lambda, :jacobi, nothing,
+            _jacobi_theta_derivative_terms(s, l, m), nothing, bits)
     else
         error("Method $method is not available for spin-weighted spherical harmonics. Supported values are auto, direct, chebyshev, jacobi (case-insensitive).")
     end
@@ -295,9 +338,11 @@ end
 Compute the value of the spin-weighted spherical harmonic at the point `(theta, phi)`.
 Additionally compute the `theta_derivative`-th derivative with respect to `theta` and the `phi_derivative`-th derivative with respect to `phi` exactly.
 """
-(swsh_func::SpinWeightedSphericalHarmonicFunction)(theta, phi; theta_derivative::Int=0, phi_derivative::Int=0) = begin
+(swsh_func::SpinWeightedSphericalHarmonicFunction{T})(theta, phi; theta_derivative::Int=0, phi_derivative::Int=0) where {T} =
+    _evaluate_at(T, swsh_func.precision, theta, phi) do theta, phi
     if swsh_func.method == :direct
-        return _nth_derivative_spherical_harmonic_direct_eval(swsh_func.s, swsh_func.l, swsh_func.m, theta_derivative, phi_derivative, theta, phi)
+        return _nth_derivative_spherical_harmonic_direct_eval(swsh_func.s, swsh_func.l, swsh_func.m, theta_derivative, phi_derivative, theta, phi;
+            prepared=swsh_func.direct_terms)
     elseif swsh_func.method == :chebyshev
         return _nth_derivative_spheroidal_harmonic_chebyshev(swsh_func.chebyshev_solution, swsh_func.m, theta_derivative, phi_derivative, theta, phi)
     elseif swsh_func.method == :jacobi
@@ -309,7 +354,7 @@ Additionally compute the `theta_derivative`-th derivative with respect to `theta
 end
 
 @doc raw"""
-    spin_weighted_spheroidal_eigenvalue(s::Int, l, m::Int, c; N::Int=-1, method="auto", branch_n=nothing, lambda0=nothing, cf_depth::Int=-1, tol=-1, max_iter::Int=80)
+    spin_weighted_spheroidal_eigenvalue(s::Int, l, m::Int, c; N::Int=-1, method="auto", branch_n=nothing, lambda0=nothing, cf_depth::Int=-1, tol=-1, max_iter::Int=80, precision=nothing)
 
 Compute the eigenvalue of the spin-weighted spheroidal harmonic
 with spin weight `s`, harmonic index `l`, azimuthal index `m`, and spheroidicity `c` ($c = a\omega$).
@@ -324,16 +369,27 @@ decomposition. For every method, `l` must be an integer with `l ≥ max(|s|, |m|
 
 For the spectral decomposition this function is simply a wrapper to `Teukolsky_lambda_const`
 for backward compatibility.
+
+The eigenvalue is computed in the floating-point type of `c` (at least Float64), or in BigFloat at
+`precision` bits.
 """
 function spin_weighted_spheroidal_eigenvalue(s::Int, l, m::Int, c; N::Int=-1, method="auto",
-    branch_n::Union{Nothing, Int}=nothing, lambda0=nothing, cf_depth::Int=-1, tol=-1, max_iter::Int=80)
+    branch_n::Union{Nothing, Int}=nothing, lambda0=nothing, cf_depth::Int=-1, tol=-1, max_iter::Int=80,
+    precision::Union{Nothing, Integer}=nothing)
 
-    if _resolve_spheroidal_method(method, s, l, m) == "leaver"
-        return _leaver_eigenvalue(s, l, m, c; branch_n=branch_n, lambda0=lambda0, cf_depth=cf_depth, tol=tol, max_iter=max_iter)
+    method = _resolve_spheroidal_method(method, s, l, m)
+    _check_precision_keyword(precision)
+    c, lambda0 = (_with_precision_keyword(x, precision) for x in (c, lambda0))
+    T = method == "leaver" ? _float_type(c, filter(!isnothing, (lambda0,))...) : _float_type(c)
+    bits = precision === nothing ? _input_precision(c, lambda0) : precision
+    return _with_precision(T, bits) do
+        c = _to_float(T, c)
+        if method == "leaver"
+            return _leaver_eigenvalue(s, l, m, c; branch_n=branch_n, lambda0=lambda0, cf_depth=cf_depth, tol=tol, max_iter=max_iter)
+        end
+        # N = -1 is passed on: the spectral solvers choose the size themselves (see _determine_matrix_size_N)
+        Teukolsky_lambda_const(c, s, l, m, N)
     end
-
-    # N = -1 is passed on: the spectral solvers choose the size themselves (see _determine_matrix_size_N)
-    Teukolsky_lambda_const(c, s, l, m, N)
 end
 
 @doc raw"""
@@ -345,8 +401,8 @@ with spin weight `s`, harmonic index `l`, and azimuthal index `m`
 
 """
 function spin_weighted_spherical_eigenvalue(s::Int, l::Int, m::Int=0)
-    # Eigenvalue for the Schwarzschild case does not depend on m
-    Teukolsky_lambda_const(0, s, l, m)
+    # Eigenvalue for the Schwarzschild case does not depend on m; it is an exact integer
+    eigenvalue_Schwarzschild(s, l)
 end
 
 

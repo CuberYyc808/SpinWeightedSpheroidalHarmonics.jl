@@ -30,10 +30,13 @@ mutable struct LeaverAngularSolution
     @atomic theta_fun # Chebyshev representation of the unnormalized S(θ), built on demand for θ-derivatives (atomic: shared solutions may be differentiated from several threads)
 end
 
-_LEAVER_TINY = 1e-30 # Continued-fraction denominators smaller than this are nudged away from zero
-_LEAVER_CONTINUATION_STEP = 0.25 # Largest step in c taken when marching the eigenvalue away from c = 0
-_LEAVER_MAX_UNCERTAINTY = 1e-6 # Relative uncertainty of the eigenvalue beyond which the working precision is deemed insufficient
-_LEAVER_MAX_SERIES_ERROR = 1e-3 # Estimated relative accuracy of the power series below which the harmonic is no longer worth returning
+# Continued-fraction denominators smaller than this are nudged away from zero
+_leaver_tiny(::Type{T}) where {T} = _tol(T, 1e-30)
+const _LEAVER_CONTINUATION_STEP = 0.25 # Largest step in c taken when marching the eigenvalue away from c = 0
+# Relative uncertainty of the eigenvalue beyond which the working precision is deemed insufficient
+_leaver_max_uncertainty(::Type{T}) where {T} = _tol(T, 1e-6)
+# Estimated relative accuracy of the power series below which the harmonic is no longer worth returning
+_leaver_max_series_error(::Type{T}) where {T} = _tol(T, 1e-3)
 
 @doc raw"""
     _leaver_recurrence_coefficients(n::Int, s::Int, m::Int, c, λ)
@@ -65,7 +68,8 @@ function _leaver_branch_index(s::Int, m::Int, l)
 end
 
 function _leaver_regularize_denominator(denom)
-    return abs(denom) < _LEAVER_TINY ? denom + _LEAVER_TINY * (1 + 1im) : denom
+    tiny = _leaver_tiny(real(typeof(float(denom))))
+    return abs(denom) < tiny ? denom + tiny * (1 + 1im) : denom
 end
 
 # Continued fraction running from the n-th coefficient down to a_0
@@ -192,9 +196,9 @@ end
 # this keeps a comfortable margin on top of what is actually needed
 _leaver_default_cf_depth(n::Int, c) = max(200, 20 * n + 50 * ceil(Int, abs(c)))
 
-_LEAVER_MIN_OVERLAP = 0.9 # Smallest overlap between the eigenfunctions of consecutive march steps for a step to be accepted
-_LEAVER_MAX_HALVINGS = 12 # A march step may shrink to 2^-12 of the nominal step before the march gives up
-_LEAVER_MARCH_BUDGET = 10 # The march gives up after this many solves per nominal step (plus a fixed 100)
+const _LEAVER_MIN_OVERLAP = 0.9 # Smallest overlap between the eigenfunctions of consecutive march steps for a step to be accepted
+const _LEAVER_MAX_HALVINGS = 12 # A march step may shrink to 2^-12 of the nominal step before the march gives up
+const _LEAVER_MARCH_BUDGET = 10 # The march gives up after this many solves per nominal step (plus a fixed 100)
 const _LEAVER_PROFILE_THETA = range(0.02, π - 0.02, length=48)
 
 # where is the c the solve failed at, which during the march in c can differ from the target c
@@ -302,8 +306,9 @@ function _leaver_eigenvalue(s::Int, l, m::Int, c;
     branch. Unless the user supplies their own guess, we therefore march c from
     0 (where l(l+1) - s(s+1) is exact for integer l) to its target value.
     =#
+    T = real(typeof(float(c)))
     if isnothing(lambda0)
-        λ, mismatch = _leaver_march(s, l, m, c, n, l * (l + 1) - s * (s + 1);
+        λ, mismatch = _leaver_march(s, l, m, c, n, T(l * (l + 1) - s * (s + 1));
             depth=depth, tolerance=tolerance, max_iter=max_iter, fd_eps=fd_eps)
     else
         mismatch = x -> _leaver_mismatch(x, s, m, c, n; depth=depth)
@@ -312,7 +317,7 @@ function _leaver_eigenvalue(s::Int, l, m::Int, c;
     end
 
     uncertainty = _leaver_root_uncertainty(mismatch, λ, working_eps)
-    uncertainty > _LEAVER_MAX_UNCERTAINTY * (1 + abs(λ)) && error("Roundoff in the continued fraction only locates the eigenvalue for (s, l, m) = ($s, $l, $m), c = $c, branch n = $n to within $uncertainty. Try again with c in a wider floating-point precision, e.g. big($c).")
+    uncertainty > _leaver_max_uncertainty(T) * (1 + abs(λ)) && error("Roundoff in the continued fraction only locates the eigenvalue for (s, l, m) = ($s, $l, $m), c = $c, branch n = $n to within $uncertainty. Try again with c in a wider floating-point precision, e.g. big($c).")
     return λ
 end
 
@@ -373,7 +378,8 @@ Return the series coefficients `a_n` truncated where they stop contributing at
 machine precision. When `nmax = -1`, the number of terms is grown automatically
 until the tail has decayed; otherwise exactly `nmax + 1` terms are computed.
 """
-function _leaver_converged_series_coefficients(s::Int, m::Int, c, λ, branch_n::Int; nmax::Int=-1, nmax_limit::Int=6400)
+function _leaver_converged_series_coefficients(s::Int, m::Int, c, λ, branch_n::Int; nmax::Int=-1,
+        nmax_limit::Int=_nterms(real(typeof(float(c))), 6400))
     # The branch index has to be inside the series for the two halves of the
     # recurrence in _leaver_series_coefficients to meet
     smallest_nmax = branch_n + 1
@@ -412,6 +418,9 @@ which keeps the exponents integral and makes the manifest smoothness of `S` in
 θ (as opposed to in ``\cos\theta``) available to the Chebyshev representation
 used for θ-derivatives.
 """
+# The real floating-point type the solution is computed in
+_leaver_real_type(sol::LeaverAngularSolution) = real(eltype(sol.coeffs))
+
 function _leaver_prefactor(sol::LeaverAngularSolution, theta)
     half_theta = theta / 2
     cos_half, sin_half = cos(half_theta), sin(half_theta)
@@ -430,8 +439,8 @@ until its tail has decayed. Evaluating the Leaver series involves cancellations
 that leave a roundoff floor, and letting ApproxFun construct the Fun adaptively
 would make it refine against that floor forever instead of stopping.
 =#
-function _leaver_chebyshev_fit(f; n_start::Int=64, n_max::Int=4096)
-    space = Chebyshev(0..π)
+function _leaver_chebyshev_fit(f, ::Type{T}; n_start::Int=64, n_max::Int=4096) where {T}
+    space = Chebyshev(zero(T)..T(π))
     n = n_start
     while true
         coefficients = transform(space, f.(points(space, n)))
@@ -446,7 +455,7 @@ function _leaver_theta_fun(sol::LeaverAngularSolution)
     fun = @atomic sol.theta_fun
     if isnothing(fun)
         # Concurrent first calls may both build the fit; the first stored value is kept and returned to both.
-        built = _leaver_chebyshev_fit(theta -> _leaver_raw_theta_value(sol, theta))
+        built = _leaver_chebyshev_fit(theta -> _leaver_raw_theta_value(sol, theta), _leaver_real_type(sol))
         old, _ = @atomicreplace sol.theta_fun nothing => built
         fun = isnothing(old) ? built : old
     end
@@ -466,16 +475,17 @@ The phase can only be fixed this way when `l` is an integer; for a continued
 keep the natural Leaver convention `a_0 = 1`.
 """
 function _leaver_normalization_const(sol::LeaverAngularSolution, s::Int, l, m::Int)
-    theta_integral = sum(_leaver_chebyshev_fit(theta -> abs2(_leaver_raw_theta_value(sol, theta)) * sin(theta)))
+    T = _leaver_real_type(sol)
+    theta_integral = sum(_leaver_chebyshev_fit(theta -> abs2(_leaver_raw_theta_value(sol, theta)) * sin(theta), T))
     theta_integral <= 0 && error("Could not normalize the Leaver spheroidal harmonic: the norm is non-positive.")
-    magnitude = sqrt(2π * theta_integral)
+    magnitude = sqrt(2T(π) * theta_integral)
 
     if l isa Integer && l >= max(abs(s), abs(m))
-        spherical = spin_weighted_spherical_harmonic(s, Int(l), m)
-        overlap = sum(_leaver_chebyshev_fit(theta -> conj(spherical(theta, 0.0)) * _leaver_raw_theta_value(sol, theta) * sin(theta)))
+        spherical = spin_weighted_spherical_harmonic(s, Int(l), m; precision=_precision_keyword(_precision_bits(T)))
+        overlap = sum(_leaver_chebyshev_fit(theta -> conj(spherical(theta, zero(T))) * _leaver_raw_theta_value(sol, theta) * sin(theta), T))
         # |overlap| is bounded by sqrt(theta_integral/(2π)); bail out of fixing
         # the phase if this mode happens to have essentially no overlap with sYlm
-        if abs(overlap) > 1e-3 * sqrt(theta_integral / (2π))
+        if abs(overlap) > 1e-3 * sqrt(theta_integral / (2T(π)))
             return magnitude * overlap / abs(overlap)
         end
     end
@@ -517,7 +527,7 @@ function _leaver_angular_solution(s::Int, m::Int, c, λ; branch_n::Int, nmax::In
     sol = LeaverAngularSolution(c, λ, branch_n, abs(m - s), abs(m + s), coeffs, nothing)
 
     accuracy = _leaver_series_accuracy(sol)
-    accuracy > _LEAVER_MAX_SERIES_ERROR && error("Cancellation in Leaver's power series for (s, m) = ($s, $m), c = $c, branch n = $branch_n leaves it with a relative accuracy of only about $accuracy. Use the spectral decomposition (e.g. method=\"jacobi\"), which does not suffer from this, or a wider floating-point precision.")
+    accuracy > _leaver_max_series_error(_leaver_real_type(sol)) && error("Cancellation in Leaver's power series for (s, m) = ($s, $m), c = $c, branch n = $branch_n leaves it with a relative accuracy of only about $accuracy. Use the spectral decomposition (e.g. method=\"jacobi\"), which does not suffer from this, or a wider floating-point precision.")
 
     return sol
 end
