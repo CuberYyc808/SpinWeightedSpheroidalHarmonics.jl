@@ -339,6 +339,8 @@ end
 
 function _nth_derivative_spherical_harmonic_direct_eval(s::Int, l::Int, m::Int, theta_derivative::Int, phi_derivative::Int, theta, phi;
         prepared=nothing)
+    # Outside [0, π] the harmonic is evaluated at the mirrored point, as in the other methods
+    theta, phi = _fold_theta_phi(theta, phi)
     ct2 = cos(theta/2)
     st2 = sin(theta/2)
 

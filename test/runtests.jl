@@ -440,5 +440,26 @@ end
     end
 end
 
+@testset "All methods agree outside [0, π]" begin
+    # Outside [0, π] every method evaluates at the mirrored point (2π - θ, φ + π)
+    thetas = (4.0, -0.5, 2π + 0.3, -3.5)
+    for (s, l, m) in ((-2, 5, 1), (1, 3, -2), (-1, 4, 0), (2, 6, -3))
+        direct = spin_weighted_spherical_harmonic(s, l, m; method="direct")
+        for method in ("jacobi", "chebyshev"), θ in thetas, d in 0:2, p in 0:1
+            Y = spin_weighted_spherical_harmonic(s, l, m; method)
+            @test Y(θ, 0.7; theta_derivative=d, phi_derivative=p) ≈
+                direct(θ, 0.7; theta_derivative=d, phi_derivative=p) rtol=1e-8 atol=1e-10
+        end
+    end
+    for (s, l, m) in ((-2, 2, 2), (1, 3, -2))
+        reference = spin_weighted_spheroidal_harmonic(s, l, m, 0.7; method="direct")
+        for method in ("jacobi", "chebyshev", "leaver"), θ in thetas, d in 0:2, p in 0:1
+            h = spin_weighted_spheroidal_harmonic(s, l, m, 0.7; method)
+            @test h(θ, 0.7; theta_derivative=d, phi_derivative=p) ≈
+                reference(θ, 0.7; theta_derivative=d, phi_derivative=p) rtol=1e-9 atol=1e-11
+        end
+    end
+end
+
 include("precision.jl")
 include("threads.jl")
