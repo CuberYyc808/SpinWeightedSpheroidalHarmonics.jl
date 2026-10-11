@@ -461,5 +461,36 @@ end
     end
 end
 
+@testset "Jacobi evaluation near the poles" begin
+    # A negative Jacobi parameter puts a factor (1 - cos θ)^k or (1 + cos θ)^k into the polynomial,
+    # which cos θ cannot resolve near the pole: it is taken out exactly in terms of sin(θ/2), cos(θ/2)
+    for (s, l, m) in ((-1, 30, 0), (-2, 31, 1), (2, 32, -1), (1, 3, 0)),
+            θ in (1e-8, 1e-5, 1e-3, π - 1e-5, π - 1e-8)
+        Y = spin_weighted_spherical_harmonic(s, l, m; method="jacobi")
+        exact = spin_weighted_spherical_harmonic(s, l, m; method="jacobi", precision=256)
+        scale = sqrt((2l + 1) / 4π)
+        for d in 0:2
+            @test abs(Y(θ, 0.3; theta_derivative=d) -
+                ComplexF64(exact(big(θ), big(0.3); theta_derivative=d))) <= 1e-13 * scale * (l + 1)^d
+        end
+    end
+end
+
+@testset "Equator values for the Chebyshev solver" begin
+    # sYlm(π/2) and dsYlm/dθ(π/2) are exact integer sums over 2^l
+    for (s, l, m) in ((-2, 20, 1), (0, 3, 0), (1, 4, 2), (2, 35, -7))
+        exact = spin_weighted_spherical_harmonic(s, l, m; method="jacobi", precision=256)
+        for d in 0:1
+            @test SWSH._spherical_harmonic_at_pi_over_2(Float64, s, l, m; theta_derivative=d) ≈
+                Float64(real(exact(big(π) / 2, big(0); theta_derivative=d))) rtol=1e-15 atol=1e-15
+        end
+    end
+    # the case of the Chebyshev solver test that failed on another platform by 1.1e-10, now well inside
+    cheb = spin_weighted_spherical_harmonic(-2, 20, 1; method="chebyshev")
+    exact = spin_weighted_spherical_harmonic(-2, 20, 1; method="jacobi", precision=256)
+    θ = range(0.0, π, length=41)[38]
+    @test abs(cheb(θ, 0.4) - ComplexF64(exact(big(θ), big(0.4)))) < 1e-11
+end
+
 include("precision.jl")
 include("threads.jl")

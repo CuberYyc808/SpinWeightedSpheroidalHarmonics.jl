@@ -42,14 +42,19 @@ function _summation_term_prefactors(::Type{T}, s::Int, l::Int, m::Int) where {T}
 end
 
 #=
-sYlm(π/2, 0) in T. At the equator sin(θ/2) = cos(θ/2) = 1/√2, so the sum over r is an exact
-integer over 2^l, which is summed exactly; it is multiplied by the prefactor with at least 256
-bits (and 64 guard bits beyond T), whatever precision the caller has set.
+sYlm(π/2, 0) and its θ-derivative there, in T. At the equator sin(θ/2) = cos(θ/2) = 1/√2, so
+every term cos(θ/2)^a sin(θ/2)^b of the sum over r (a + b = 2l) is exactly 2^-l, and its
+θ-derivative is (b - a)/2 times that, with (b - a)/2 = l - 2r - s + m: both sums are exact
+integers over 2^l, summed exactly. The direct sum would lose digits to cancellation at large l.
+The result is multiplied by the prefactor with at least 256 bits (and 64 guard bits beyond T),
+whatever precision the caller has set.
 =#
-function _spherical_harmonic_at_pi_over_2(::Type{T}, s::Int, l::Int, m::Int) where {T}
+function _spherical_harmonic_at_pi_over_2(::Type{T}, s::Int, l::Int, m::Int; theta_derivative::Int=0) where {T}
+    theta_derivative in (0, 1) || throw(ArgumentError("theta_derivative must be 0 or 1."))
     rmin = max(0, m-s)
     rmax = min(l-s, l+m)
-    terms = sum((iseven(l-r-s) ? 1 : -1) * binomial(big(l-s), r) * binomial(big(l+s), r+s-m)
+    weight(r) = theta_derivative == 0 ? 1 : l - 2r - s + m
+    terms = sum((iseven(l-r-s) ? 1 : -1) * weight(r) * binomial(big(l-s), r) * binomial(big(l+s), r+s-m)
         for r in rmin:rmax; init=big(0))
     prefactor = _swsh_prefactor(T, s, l, m)
     return setprecision(BigFloat, max(256, precision(T) + 64)) do
@@ -105,7 +110,7 @@ end
 function _solve_spherical_harmonic_chebyshev(::Type{T}, s::Int, l::Int, m::Int) where {T}
     # Evaluate sYlm(\pi/2, 0) using a numerically stable method
     Ypi2 = _spherical_harmonic_at_pi_over_2(T, s, l, m)
-    dYpi2 = real(spin_weighted_spherical_harmonic(s, l, m)(T(π) / 2, zero(T); theta_derivative=1))
+    dYpi2 = _spherical_harmonic_at_pi_over_2(T, s, l, m; theta_derivative=1)
     A = spin_weighted_spherical_eigenvalue(s, l, m)
     return _solve_spheroidal_harmonic_chebyshev(T, s, l, m, zero(T), A, Ypi2, dYpi2)
 end
@@ -162,6 +167,27 @@ function _jacobi_polynomial_recurrence(n::Int, α::Int, β::Int, x::Real)
     return pn
 end
 
+#=
+sin(θ/2)^a cos(θ/2)^b P_n^(α,β)(cos θ). A negative parameter α = -k makes P_n^(α,β) carry the
+factor ((x - 1)/2)^k = (-sin²(θ/2))^k, which x = cos θ cannot resolve near θ = 0 (cos(1e-8) == 1):
+the polynomial would be a cancellation down to roundoff. Szegő (4.22.2),
+    C(n, k) P_n^(-k,β)(x) = C(n + β, k) ((x - 1)/2)^k P_{n-k}^(k,β)(x),
+takes that factor out exactly in terms of sin(θ/2); likewise β = -k gives cos(θ/2)^(2k) through
+P_n^(α,β)(-x) = (-1)^n P_n^(β,α)(x). (n ≥ k for every term of a harmonic.)
+=#
+function _jacobi_term(n::Int, α::Int, β::Int, a::Int, b::Int, st2, ct2, x)
+    if α < 0
+        k = -α
+        ratio = prod(one(x) * (n + β - i) / (n - i) for i in 0:k-1)
+        return (isodd(k) ? -ratio : ratio) * _jacobi_term(n - k, k, β, a + 2k, b, st2, ct2, x)
+    elseif β < 0
+        k = -β
+        ratio = prod(one(x) * (n + α - i) / (n - i) for i in 0:k-1)
+        return ratio * _jacobi_term(n - k, α, k, a, b + 2k, st2, ct2, x)
+    end
+    return st2^a * ct2^b * _jacobi_polynomial_recurrence(n, α, β, x)
+end
+
 function _spin_weighted_spherical_harmonic_jacobi_core_nonnegative_m(s::Int, l::Int, m::Int, theta)
     m < 0 && error("Jacobi core expects m >= 0")
 
@@ -172,9 +198,8 @@ function _spin_weighted_spherical_harmonic_jacobi_core_nonnegative_m(s::Int, l::
     x = cos(theta)
     st2 = sin(theta / 2)
     ct2 = cos(theta / 2)
-    P = _jacobi_polynomial_recurrence(n, α, β, x)
 
-    return _swsh_prefactor(typeof(x), s, l, m) * st2^α * ct2^β * P
+    return _swsh_prefactor(typeof(x), s, l, m) * _jacobi_term(n, α, β, α, β, st2, ct2, x)
 end
 
 function _differentiate_jacobi_terms(terms::Dict{NTuple{5, Int}, Float64})
@@ -238,7 +263,7 @@ function _spin_weighted_spherical_harmonic_jacobi_theta_derivative_nonnegative_m
     out = zero(x)
     for (key, coeff) in terms
         nterm, pterm, qterm, aterm, bterm = key
-        out += coeff * st2^aterm * ct2^bterm * _jacobi_polynomial_recurrence(nterm, pterm, qterm, x)
+        out += coeff * _jacobi_term(nterm, pterm, qterm, aterm, bterm, st2, ct2, x)
     end
 
     return _swsh_prefactor(typeof(x), s, l, m) * out

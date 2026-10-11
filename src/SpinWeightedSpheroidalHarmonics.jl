@@ -119,7 +119,7 @@ function _spheroidal_equator_values(::Type{T}, coefficients_params, coefficients
         l = l_list[idx]
         # Evaluate sYlm(\pi/2, 0) using a numerically stable method
         Ypi2 = _spherical_harmonic_at_pi_over_2(T, s, l, m)
-        dYpi2 = real(spin_weighted_spherical_harmonic(s, l, m)(T(π) / 2, zero(T); theta_derivative=1))
+        dYpi2 = _spherical_harmonic_at_pi_over_2(T, s, l, m; theta_derivative=1)
 
         S_half += coefficients[idx] * Ypi2
         dS_half += coefficients[idx] * dYpi2
