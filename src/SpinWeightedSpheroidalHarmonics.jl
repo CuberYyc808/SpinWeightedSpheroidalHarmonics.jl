@@ -8,7 +8,7 @@ include("spectral.jl")
 include("continuation.jl")
 include("leaver.jl")
 
-export spin_weighted_spheroidal_harmonic, spin_weighted_spherical_harmonic, spin_weighted_spheroidal_eigenvalue, spin_weighted_spherical_eigenvalue # Expose these functions to the user
+export spin_weighted_spheroidal_harmonic, spin_weighted_spherical_harmonic, spin_weighted_spheroidal_eigenvalue, spin_weighted_spherical_eigenvalue
 export Teukolsky_lambda_const # For backward compatibility
 export AngularEigenpair, AngularPathResult
 export AngularContinuationError, AngularCache, DEFAULT_ANGULAR_CACHE
@@ -17,7 +17,8 @@ export continue_angular_lateral_pair, mirror_angular_parameters
 export angular_mirror_residual, angular_precision_certificate
 export angular_observables
 
-# Spherical-harmonic coefficients smaller than this are ignored in the spectral decomposition
+# Spherical harmonics whose coefficient is below this in magnitude are left out when the spheroidal
+# harmonic is built and evaluated
 _spherical_coefficient_tol(::Type{T}) where {T} = _tol(T, 1e-16)
 
 # c (or another input) in the working type T
@@ -88,7 +89,7 @@ function Base.show(io::IO, ::MIME"text/plain", swsh_func::SpinWeightedSpheroidal
 end
 
 function _unnormalized_spin_weighted_spheroidal_harmonic(::Type{T}, coefficients_params, coefficients, spherical_harmonics_l, theta, phi; theta_derivative::Int=0, phi_derivative::Int=0) where {T}
-    # Compute the spin-weighted spherical harmonics needed
+    # Sum the stored spherical harmonics weighted by their coefficients
     output = zero(theta)
     l_list = construct_all_l_in_matrix(coefficients_params.s, coefficients_params.m, coefficients_params.N)
 
@@ -166,7 +167,8 @@ default value `N=-1` indicates that a suitable value of `N` will be determined a
 For every method, the harmonic index `l` must be an integer with `l ≥ max(|s|, |m|)`. A solver for
 non-integer (complex) degree is planned.
 
-The remaining keyword arguments are specific to `"leaver"`. `lambda` supplies the eigenvalue
+The keyword arguments `lambda`, `lambda0`, `branch_n`, `cf_depth`, `tol` and `max_iter` are specific
+to `"leaver"`. `lambda` supplies the eigenvalue
 instead of solving for it, and `lambda0` starts the solver from another initial guess. `branch_n` (counted from `0`
 for the lowest mode `l = max(|s|, |m|)`, and by default the mode `l` itself) chooses
 which inversion of the continued fraction is used; all of them have the same roots, but the
@@ -302,8 +304,8 @@ Return a SpinWeightedSphericalHarmonicFunction object that can be evaluated at a
 
 By default (`method="auto"`) the harmonic is evaluated with a Jacobi polynomial recurrence (`method="jacobi"`, see
 https://arxiv.org/abs/2208.03691), which is stable and fast for every `l`, near the poles too. The direct evaluation of the
-exact analytical sum, Eq. (A8) (`method="direct"`), remains available; it loses digits to cancellation as `l` grows.
-The Chebyshev pseudo-spectral method (`method="chebyshev"`) remains available as an explicit option.
+exact analytical sum, Eq. (A8) (`method="direct"`), can be selected explicitly; it loses digits to cancellation as `l` grows.
+The Chebyshev pseudo-spectral method (`method="chebyshev"`) can be selected explicitly.
 Method names are case-insensitive.
 
 The harmonic is evaluated in the floating-point type of the angles (at least Float64). With
@@ -390,7 +392,8 @@ function spin_weighted_spheroidal_eigenvalue(s::Int, l, m::Int, c; N::Int=-1, me
         if method == "leaver"
             return _leaver_eigenvalue(s, l, m, c; branch_n=branch_n, lambda0=lambda0, cf_depth=cf_depth, tol=tol, max_iter=max_iter)
         end
-        # N = -1 is passed on: the spectral solvers choose the size themselves (see _determine_matrix_size_N)
+        # N = -1 is passed on: the spectral solvers then choose the matrix size themselves
+        # (_adaptive_real_lambda for real c, _complex_truncation_order for complex c)
         Teukolsky_lambda_const(c, s, l, m, N)
     end
 end

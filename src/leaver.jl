@@ -15,8 +15,8 @@ which admits a minimal (i.e. normalizable) solution only for the eigenvalues λ.
 Those are therefore the roots of a continued fraction, which we invert with a
 damped Newton iteration.
 
-The harmonic index `l` enters only through the branch index of the continued
-fraction and through the initial guess for λ. The public API requires an integer
+In the eigenvalue solve, the harmonic index `l` enters only through the branch index of the
+continued fraction and through the initial guess for λ. The public API requires an integer
 `l` (see `_resolve_spheroidal_method`); a non-integer degree needs a dedicated solver.
 =#
 
@@ -34,7 +34,7 @@ _leaver_tiny(::Type{T}) where {T} = _tol(T, 1e-30)
 const _LEAVER_CONTINUATION_STEP = 0.25 # Largest step in c taken when marching the eigenvalue away from c = 0
 # Relative uncertainty of the eigenvalue beyond which the working precision is deemed insufficient
 _leaver_max_uncertainty(::Type{T}) where {T} = _tol(T, 1e-6)
-# Estimated relative accuracy of the power series below which the harmonic is no longer worth returning
+# Estimated relative error of the power series beyond which the harmonic is no longer worth returning
 _leaver_max_series_error(::Type{T}) where {T} = _tol(T, 1e-3)
 
 @doc raw"""
@@ -161,6 +161,7 @@ function _leaver_newton(f, λ0; tol=1e-12, max_iter::Int=80, fd_eps=1e-7)
 
         trial = λ - step
         Ftrial = f(trial)
+        # Halve the step at most six times; after that the trial point is taken even if the residual grew
         damping = 1.0
         while abs(Ftrial) > abs(F) && damping > 1 / 64
             damping /= 2
@@ -181,6 +182,7 @@ but by |c| ~ 12 it leaves barely two significant digits of the eigenvalue.
 =#
 function _leaver_root_uncertainty(f, λ, working_eps)
     scale = 1 + abs(λ)
+    # The spread of the residual over seven points a thousand ulps apart around λ is taken as its roundoff floor
     jitter = 1000 * working_eps * scale
     residuals = [abs(f(λ + k * jitter)) for k in -3:3]
     noise = maximum(residuals) - minimum(residuals)
@@ -198,9 +200,11 @@ _leaver_default_cf_depth(n::Int, c) = max(200, 20 * n + 50 * ceil(Int, abs(c)))
 const _LEAVER_MIN_OVERLAP = 0.9 # Smallest overlap between the eigenfunctions of consecutive march steps for a step to be accepted
 const _LEAVER_MAX_HALVINGS = 12 # A march step may shrink to 2^-12 of the nominal step before the march gives up
 const _LEAVER_MARCH_BUDGET = 10 # The march gives up after this many solves per nominal step (plus a fixed 100)
+# θ grid on which _leaver_mode_profile samples the eigenfunction; the poles, where the sqrt(sin θ) weight
+# vanishes, are left out
 const _LEAVER_PROFILE_THETA = range(0.02, π - 0.02, length=48)
 
-# where is the c the solve failed at, which during the march in c can differ from the target c
+# `where` is the c at which the solve failed, which during the march in c can differ from the target c
 _leaver_nonconvergence_message(s, l, m, c, n; where=c) = "Leaver continued-fraction solve did not converge for (s, l, m) = ($s, $l, $m), c = $where, branch n = $n. Try again with c in a wider floating-point precision, e.g. big($c)."
 
 # The eigenfunction for λ, sampled on a θ grid (weighted by sqrt(sin θ)) and scaled to unit norm,
@@ -222,7 +226,7 @@ little, while a neighbouring mode is a different function (for real c, an orthog
 A step that fails either check is halved, and steps grow back once the march is past the
 difficulty. Where the neighbour is so close that only tiny steps would stay on the mode,
 the march gives up rather than grinding on: both the smallest step and the total number of
-solves are limited. Return the eigenvalue and the continued-fraction mismatch at the target.
+solves are limited. Return the eigenvalue and the mismatch function (the residual in λ) at the target c.
 =#
 function _leaver_march(s::Int, l, m::Int, c, n::Int, λ0; depth, tolerance, max_iter, fd_eps)
     nominal = iszero(c) ? 1.0 : min(1.0, _LEAVER_CONTINUATION_STEP / Float64(abs(c)))
@@ -300,7 +304,7 @@ function _leaver_eigenvalue(s::Int, l, m::Int, c;
 
     #=
     Newton's method only converges locally, and the eigenvalue drifts by more
-    than the spacing between neighboring branches once |c| grows to order unity,
+    than the spacing between neighbouring branches once |c| grows to order unity,
     so a solve started from the c = 0 guess happily converges onto the wrong
     branch. Unless the user supplies their own guess, we therefore march c from
     0 (where l(l+1) - s(s+1) is exact for integer l) to its target value.
@@ -371,17 +375,21 @@ function _leaver_trim_series(coeffs)
 end
 
 @doc raw"""
-    _leaver_converged_series_coefficients(s::Int, m::Int, c, λ, branch_n::Int; nmax::Int=-1)
+    _leaver_converged_series_coefficients(s::Int, m::Int, c, λ, branch_n::Int; nmax::Int=-1, nmax_limit)
 
-Return the series coefficients `a_n` truncated where they stop contributing at
-machine precision. When `nmax = -1`, the number of terms is grown automatically
-until the tail has decayed; otherwise exactly `nmax + 1` terms are computed.
+Return the series coefficients `a_n` truncated where they stop contributing at the working
+precision. When `nmax = -1`, the number of terms is grown automatically, up to `nmax_limit`
+(6400 in Float64, more in a wider precision), until the tail has decayed; otherwise
+`max(nmax, branch_n + 1) + 1` terms are computed and trimmed in the same way.
 """
 function _leaver_converged_series_coefficients(s::Int, m::Int, c, λ, branch_n::Int; nmax::Int=-1,
         nmax_limit::Int=_nterms(real(typeof(float(c))), 6400))
     # The branch index has to be inside the series for the two halves of the
     # recurrence in _leaver_series_coefficients to meet
     smallest_nmax = branch_n + 1
+    # The backward sweep for the ratios is seeded 800 levels beyond the last computed coefficient, far
+    # enough for it to have settled onto the minimal solution by the time it reaches the coefficients
+    # that are kept (see _leaver_series_coefficients)
     if nmax != -1
         n = max(nmax, smallest_nmax)
         return _leaver_trim_series(_leaver_series_coefficients(s, m, c, λ, branch_n, n, n + 800))
@@ -406,17 +414,6 @@ function _leaver_series_sum(coeffs, u)
     return y
 end
 
-@doc raw"""
-    _leaver_raw_theta_value(sol::LeaverAngularSolution, theta)
-
-Evaluate the *unnormalized* θ-dependent part of the harmonic. `theta` must
-already lie in ``[0, \pi]``.
-
-We write ``u^{k_-} (1-u)^{k_+} = \cos(\theta/2)^{|m-s|} \sin(\theta/2)^{|m+s|}``,
-which keeps the exponents integral and makes the manifest smoothness of `S` in
-θ (as opposed to in ``\cos\theta``) available to the Chebyshev representation
-used for θ-derivatives.
-"""
 # The real floating-point type the solution is computed in
 _leaver_real_type(sol::LeaverAngularSolution) = real(eltype(sol.coeffs))
 
@@ -427,6 +424,17 @@ function _leaver_prefactor(sol::LeaverAngularSolution, theta)
     return exp(2 * sol.c * u) * cos_half^sol.pminus * sin_half^sol.pplus, u
 end
 
+@doc raw"""
+    _leaver_raw_theta_value(sol::LeaverAngularSolution, theta)
+
+Evaluate the *unnormalized* θ-dependent part of the harmonic. `theta` must
+already lie in ``[0, \pi]``.
+
+The prefactor, computed by `_leaver_prefactor`, is written as
+``e^{2cu} u^{k_-} (1-u)^{k_+} = e^{2cu} \cos(\theta/2)^{|m-s|} \sin(\theta/2)^{|m+s|}``,
+which keeps the exponents integral, so that the harmonic and its θ-derivatives
+(see `_leaver_theta_derivative`) are smooth functions of θ, also at the poles.
+"""
 function _leaver_raw_theta_value(sol::LeaverAngularSolution, theta)
     prefactor, u = _leaver_prefactor(sol, theta)
     return prefactor * _leaver_series_sum(sol.coeffs, u)

@@ -1,6 +1,18 @@
 # Continuation of an angular mode along a path of spheroidicities, followed in Float64 (Newton steps
 # with a dense eigendecomposition to fall back on) and refined in a wider working precision; the cache
 # of continued modes; the precision certificate.
+#=
+Defaults of the keyword arguments of track_angular_mode (see its docstring), and the limit on the
+eigenvalue condition number. A step changes c by at most SWSH_DEFAULT_MAX_PATH_STEP; a rejected step is
+halved until it falls below SWSH_DEFAULT_MIN_PATH_STEP relative to max(1, |c|), at which point the
+rejection is taken to be a collision rather than a step that is too large. SWSH_DEFAULT_OVERLAP_MIN is
+the overlap with the previous eigenvector that identifies a candidate as the same mode, and
+SWSH_DEFAULT_OVERLAP_MARGIN_MIN the lead over the runner-up required when two eigenvalues are close.
+SWSH_DEFAULT_RESIDUAL_TOL bounds the relative residual of an accepted eigenpair.
+SWSH_DEFAULT_EP_CONDITION_LIMIT bounds the eigenvalue condition number 1/|vᵀv| (see
+_complex_symmetric_eigenvector_condition), which diverges at an exceptional point: a candidate above it
+is rejected, and one above its square root is flagged :near_collision.
+=#
 const SWSH_DEFAULT_MAX_PATH_STEP = 0.5
 const SWSH_DEFAULT_MIN_PATH_STEP = 1.0e-10
 const SWSH_DEFAULT_OVERLAP_MIN = 0.65
@@ -33,7 +45,10 @@ and `matrix_size`. The others describe how the state was obtained: `residual` (r
 the eigen-equation), `previous_overlap` and `overlap_margin` (with the previous step, and how much
 larger than the runner-up's), `spectral_gap` (relative distance to the nearest other eigenvalue),
 `eigenvector_condition`, `sheet_id`, `truncation_order`, `precision_bits` (the significand bits of
-`T`) and `status` (`:continued`, or `:near_collision` when the mode is close to another one).
+`T`) and `status`, how the state was obtained: `:spherical_anchor` (`c = 0`), `:predictor_corrected`
+(Newton step), `:continued` (dense eigendecomposition), `:banded`, `:precision_tracked` (a step taken
+in the working precision where Float64 cannot resolve the mode) or `:near_collision` (accepted, but
+close to another eigenvalue or to an exceptional point).
 """
 struct AngularEigenpair{T<:AbstractFloat}
     s::Int
@@ -227,6 +242,9 @@ function _spherical_angular_pair(
         :spherical_anchor)
 end
 
+# For a complex-symmetric matrix the left eigenvector is the transpose of the right one, so 1/|vᵀv|
+# (unit v) is the condition number of the eigenvalue: 1 for a real eigenvector, and unbounded at an
+# exceptional point, where v becomes self-orthogonal (floored at 1/eps here)
 @inline function _complex_symmetric_eigenvector_condition(coefficients)
     self_overlap = abs(sum(value * value for value in coefficients))
     return inv(max(self_overlap, eps(real(eltype(coefficients)))))
@@ -262,6 +280,10 @@ function _angular_candidate(
     gap = _relative_spectral_gap(
         decomposition.values, selected, opnorm(matrix, Inf))
     condition = _complex_symmetric_eigenvector_condition(coefficients)
+    # The status is informational: _angular_candidate_accepted applies its own tests to the gap and the
+    # condition number. Below a relative gap of sqrt(eps) roundoff has turned the eigenvector by about
+    # eps/gap > sqrt(eps), i.e. it has lost half its digits; above sqrt(limit) the condition number is
+    # halfway, in digits, to SWSH_DEFAULT_EP_CONDITION_LIMIT
     status = gap <= sqrt(eps(Float64)) ||
         condition >= sqrt(SWSH_DEFAULT_EP_CONDITION_LIMIT) ?
         :near_collision : :continued
@@ -332,6 +354,7 @@ function _corrected_angular_candidate(
         residual_vector = matrix * coefficients - value * coefficients
         normalization_error = dot(reference, coefficients) - 1
         residual = max(norm(residual_vector), abs(normalization_error))
+        # Converged once the residual is down to a small multiple of roundoff on the eigenvalue
         residual <= 100eps(Float64) * max(1.0, abs(value)) && break
 
         jacobian = _bordered_jacobian(matrix, value, coefficients, reference)
@@ -368,6 +391,7 @@ function _corrected_angular_candidate(
     finite = isfinite(lambda) &&
         isfinite(residual) && isfinite(overlap) && isfinite(condition)
     finite || return nothing
+    # Same :near_collision rule as in _angular_candidate
     status = gap <= sqrt(eps(Float64)) ||
         condition >= sqrt(SWSH_DEFAULT_EP_CONDITION_LIMIT) ?
         :near_collision : :predictor_corrected
@@ -391,6 +415,9 @@ end
         candidate.previous_overlap >= overlap_min &&
         candidate.eigenvector_condition <= SWSH_DEFAULT_EP_CONDITION_LIMIT &&
         candidate.spectral_gap >= _eigenvector_gap_tol(Float64) &&
+        # The lead over the runner-up matters only when the gap is small enough for roundoff to mix
+        # the two eigenvectors (the :near_collision threshold); a Newton candidate reports a margin
+        # of 1, so the test only bites for a dense candidate
         (candidate.spectral_gap > sqrt(eps(Float64)) ||
             candidate.overlap_margin >= overlap_margin_min)
 end
@@ -445,7 +472,7 @@ function _advance_angular_segment!(
     scale = max(1.0, abs(previous.c), abs(target))
     if depth >= max_depth || step <= min_step * scale
         throw(AngularContinuationError(
-            "SWSH angular continuation exhausted its minimum step; " *
+            "SWSH angular continuation exhausted its minimum step (or its $max_depth halvings); " *
             "the path may cross an eigenvalue collision or exceptional point.",
             previous.c, target, candidate.previous_overlap,
             candidate.overlap_margin, candidate.residual,
@@ -504,7 +531,8 @@ function _advance_in_precision!(
     scale = max(one(T), abs(previous.c), abs(target))
     if depth >= max_depth || step <= min_step * scale
         throw(AngularContinuationError(
-            "SWSH angular continuation in $(_precision_name(T)) exhausted its minimum step; " *
+            "SWSH angular continuation in $(_precision_name(T)) exhausted its minimum step " *
+            "(or its $max_depth halvings); " *
             "the path may cross an eigenvalue collision or exceptional point.",
             ComplexF64(previous.c), ComplexF64(target), Float64(overlap), NaN,
             Float64(residual), NaN, Float64(condition)))
@@ -560,16 +588,16 @@ path can end on a different mode. `spin_weighted_spheroidal_harmonic` and
 `spin_weighted_spheroidal_eigenvalue` use the straight line from `0` to `c`.
 
 The `backend` argument controls how each step is solved:
-- `"auto"` (default): Newton iteration seeded by extrapolating the previous steps, falling
+- `:auto` (default): Newton iteration seeded by extrapolating the previous steps, falling
   back to a full dense eigendecomposition when Newton fails or its result is rejected,
-- `"dense"`: a full dense eigendecomposition at every step, keeping the eigenvector with
+- `:dense`: a full dense eigendecomposition at every step, keeping the eigenvector with
   the largest overlap with the previous step,
-- `"banded"`: real paths only. Every point is solved on its own with the banded eigenpair
+- `:banded`: real paths only. Every point is solved on its own with the banded eigenpair
   solver, which picks the mode by its position among the (real) eigenvalues; for real `c`
   this is the same mode as following it continuously. The matrix size is fixed by
   `truncation_order` (it is not increased adaptively), and the acceptance tolerances
   below are not used. A path with any complex point throws an `ArgumentError`.
-Backend names are case-insensitive.
+A backend may also be given as a string; names are case-insensitive.
 
 The other keyword arguments are:
 - `sheet_id`: a label stored in every returned state, to tell paths apart,
@@ -597,8 +625,11 @@ state with the initial one, and `status` is `:closed` or `:monodromy_failed`; ot
 `status` is `:open`.
 
 Throw an `AngularContinuationError` when a step cannot be accepted even at the smallest
-step size, which usually means the path runs into an eigenvalue collision or an
-exceptional point.
+step size (or after 64 halvings), or when the mode is degenerate with a neighbouring one at
+the end point of a step, beyond what the working precision resolves; either usually means
+the path runs into an eigenvalue collision or an exceptional point. With `backend=:banded`
+the degenerate case is reported by the banded solver as an `ErrorException` instead. An
+empty path throws an `ArgumentError`.
 
 # Example
 ```julia
@@ -722,6 +753,8 @@ function _track_angular_mode(
         refine_all || (states = states[end:end])
     end
 
+    # The path is closed when its last point returns to its first (always c = 0) up to a few units
+    # of roundoff
     closed = length(path) > 1 &&
         abs(last(path) - first(path)) <=
         16eps(T) * max(one(T), abs(first(path)))
@@ -735,6 +768,9 @@ function _track_angular_mode(
                 floatmin(T))
         closure_error = abs(final.lambda - initial.lambda) /
             max(one(T), abs(initial.lambda), abs(final.lambda))
+        # On the same mode the final eigenvalue agrees with the initial (spherical) one to roundoff; on
+        # another mode, which happens when the loop encircles a branch point and the modes are
+        # exchanged, the two differ by far more, so the threshold only has to separate the two cases
         status = closure_error <= _tol(T, 1.0e-10) ? :closed : :monodromy_failed
     else
         monodromy = Complex{T}(NaN, NaN)
@@ -782,6 +818,8 @@ function continue_angular_mode(
             cached = _angular_cache_get(cache, key)
             cached === nothing || return cached
         end
+        # At most 64 requested points: track_angular_mode subdivides each leg further to max_step,
+        # so this bounds only the length of the requested path, not the step
         steps = max(1, min(64,
             ceil(Int, abs(ComplexF64(target)) / SWSH_DEFAULT_MAX_PATH_STEP)))
         path = Complex{T}[
@@ -934,6 +972,10 @@ function angular_precision_certificate(
         max(one(R), abs(low_pair.lambda), abs(high_pair.lambda))
     precision_drift = Float64(abs(refined_low.lambda - refined_high.lambda) /
         max(one(BigFloat), abs(refined_low.lambda), abs(refined_high.lambda)))
+    # Accept when the truncation error (the drift between the two orders) and the Float64 residual are
+    # both at the 1e-12 level, the eigenvectors of the two orders agree to 1e-10, and the two
+    # refinements agree far more closely: they converge to the same eigenvalue of the same matrix, so a
+    # precision drift above 1e-14 means a refinement did not converge
     accepted = truncation_drift <= 1.0e-12 &&
         precision_drift <= 1.0e-14 &&
         high_pair.residual <= SWSH_DEFAULT_RESIDUAL_TOL &&

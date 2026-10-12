@@ -10,12 +10,20 @@ const SWSH_MAX_REFINEMENTS = 20
 # Number of trailing coefficients checked to decide whether the truncation is adequate
 const SWSH_COEFFICIENT_TAIL_WINDOW = 4
 
-# Below this |c| the eigenvalue is its second-order expansion in c
+# Below this |c| the eigenvalue is taken from its expansion to second order in c (_small_c_lambda)
+# instead of a banded solve: in Float64 the neglected O(c^3) terms are then about 1e-18, below the
+# resolution of an eigenvalue of order one
 _small_c_limit(::Type{T}) where {T} = _tol(T, 1e-6)
-# Convergence of the eigenvalue with the matrix size
+# The eigenvalue-only solve accepts a matrix size once its eigenvalue agrees with the one at the
+# previous size to within atol + rtol * max(|previous|, |current|): a few hundred eps absolute and a
+# few tens of eps relative (in Float64), so that roundoff alone cannot keep the refinement going
 _eigenvalue_atol(::Type{T}) where {T} = _tol(T, 5e-14)
 _eigenvalue_rtol(::Type{T}) where {T} = _tol(T, 5e-15)
+# Allowed deviation 1 - |overlap| of a computed eigenvector from the exact one; it enters only through
+# _eigenvector_gap_tol below
 _eigenvector_overlap_tol(::Type{T}) where {T} = _tol(T, 5e-13)
+# Largest relative residual ||M v - lambda v|| / ((||M|| + |lambda|) ||v||) accepted for a banded eigenpair
+# (see _real_lambda_residual); a converged LAPACK eigenpair sits at the eps level, far below
 _eigenvector_residual_tol(::Type{T}) where {T} = _tol(T, 5e-13)
 # Target size of the neglected spectral coefficients, used to estimate the matrix size
 _coefficient_tail_tol(::Type{T}) where {T} = _tol(T, 1e-14)
@@ -51,7 +59,8 @@ _precision_name(::Type{T}) where {T} = "$(precision(T))-bit $T"
 The eigenvalue is accurate to about eps*||M||, so while the gap (relative to ||M||) is
 comfortably larger than that, the eigenvalue still tells the two modes apart.
 It can then seed Leaver's method, which resolves the harmonic in a wider precision.
-Unseeded, Leaver's march in c can land on the neighbouring mode here, in any precision.
+Unseeded, Leaver's march in c may give up here, in any precision, once the neighbouring mode comes
+too close to follow (see _leaver_march); the seed lets the solve skip the march.
 =#
 function _unresolvable_eigenvector_message(s, l, m, c, relative_gap)
     T = real(typeof(float(c)))
@@ -81,7 +90,8 @@ function _determine_matrix_size_N(s::Int, l::Int, m::Int, c=0)
     At large |c| the mode is confined near a pole with a width ~ 1/sqrt(|c|), so its
     spherical-harmonic coefficients fall off like a Gaussian in l of width ~ sqrt(|c|):
     about sqrt(2 log(1/tol) |c|) more harmonics bring them below tol. This is an
-    estimate; callers that choose N themselves check the coefficient tail afterwards.
+    estimate; the real-c solvers that start from it check the coefficient tail afterwards and
+    enlarge N if needed, while the complex-c continuation uses it as is.
     =#
     T = _float_type(c)
     N = l - max(abs(m), abs(s)) + 1
@@ -600,7 +610,7 @@ end
 Start from the size estimated from |c|, which is usually enough, and accept the first
 solve whose coefficient tail and residual are small: once the neglected coefficients are
 below tolerance, a larger matrix could only change the eigenpair at that level. Increase
-the size only when the tail is still too large. The seed does not throw: whether its
+the size otherwise, whether it is the tail or the residual that is still too large. The seed does not throw: whether its
 eigenvector is resolved is decided by the caller, in the working precision.
 =#
 function _real_eigenpair_seed(c::Float64, s::Int, l::Int, m::Int)
@@ -614,6 +624,8 @@ function _real_eigenpair_seed(c::Float64, s::Int, l::Int, m::Int)
     end
 
     size = _determine_matrix_size_N(s, l, m, c)
+    # Each refinement adds at least 8 harmonics, and |c|/8 once |c| exceeds 64, so that few solves
+    # are needed even where the estimate falls well short
     step = max(8, ceil(Int, abs(c) / 8))
     for refinement in 0:SWSH_MAX_REFINEMENTS
         lambda, coefficients, gap = _real_lambda_eigenpair_at_size(
@@ -643,7 +655,7 @@ function _adaptive_real_eigenpair(c::Real, s::Int, l::Int, m::Int)
     c = T(c)
     index = _ell_index_in_matrix(s, l, m, seed.size)
     size = max(seed.size, _determine_matrix_size_N(s, l, m, c))
-    step = max(8, ceil(Int, abs(c) / 8))
+    step = max(8, ceil(Int, abs(c) / 8)) # as in _real_eigenpair_seed
     lambda, vector = seed.lambda, seed.coefficients
     for refinement in 0:SWSH_MAX_REFINEMENTS
         lambda, vector, gap = _refined_real_eigenpair(_real_lambda_band(c, s, m, size), index,
@@ -732,7 +744,7 @@ function _dense_spectral_decomposition(c, s::Int, l::Int, m::Int, N::Int=-1)
     end
     N == -1 || return _dense_real_eigenpair_at_size(c, s, l, m, N)
     N = _determine_matrix_size_N(s, l, m, c)
-    step = max(8, ceil(Int, abs(c) / 8))
+    step = max(8, ceil(Int, abs(c) / 8)) # as in _real_eigenpair_seed
     for _ in 0:SWSH_MAX_REFINEMENTS
         angular_sep, coefficients = _dense_real_eigenpair_at_size(c, s, l, m, N)
         _coefficient_tail(coefficients) <= _coefficient_tail_tol(_float_type(c)) &&
@@ -809,6 +821,9 @@ function _adaptive_real_lambda(c::Real, s::Int, l::Int, m::Int)
     c = T(c)
     lmin = max(abs(m), abs(s))
     idx = l - lmin + 1
+    # Starting size for the eigenvalue-only solve: ceil(|c|) + 8 harmonics beyond the target index, and
+    # at least SWSH_MIN_BUFFER; the size is then enlarged (as in _real_eigenpair_seed) until the
+    # eigenvalue settles
     size = max(idx + SWSH_MIN_BUFFER, idx + ceil(Int, abs(c)) + 8)
     step = max(8, ceil(Int, abs(c) / 8))
     previous = _real_lambda_eigenvalue_at_size(c, s, l, m, size)
@@ -866,6 +881,24 @@ function spectral_coefficients(c, s::Int, l::Int, m::Int, N::Int=-1;
     return coeffs
 end
 
+@doc raw"""
+    Teukolsky_lambda_const(c, s::Int, l::Int, m::Int, N::Int=-1)
+
+Compute the eigenvalue ``\lambda`` of the spin-weighted spheroidal harmonic with spin weight `s`,
+harmonic index `l`, azimuthal index `m` and spheroidicity `c` (``c = a\omega``) by spectral
+decomposition, in the floating-point type of `c`. The convention is that of Teukolsky's radial
+equation, ``\lambda = A + c^2 - 2mc`` with ``A`` the separation constant of the angular equation, so
+that ``\lambda = l(l+1) - s(s+1)`` at `c = 0`.
+
+`N` is the number of spin-weighted spherical harmonics in the decomposition; the default `N=-1`
+determines a suitable value automatically. For real `c` only the eigenvalue is computed, so it is
+available even where the eigenvector cannot be resolved. For complex `c`, "mode `l`" is the mode that
+connects continuously to the spherical harmonic `l` along the straight path from `c = 0` (see
+`continue_angular_mode`).
+
+Note that `c` comes first, unlike in `spin_weighted_spheroidal_eigenvalue`, which is the
+recommended interface; this function is kept for backward compatibility.
+"""
 function Teukolsky_lambda_const(c::Real, s::Int, l::Int, m::Int, N::Int=-1)
     T = _float_type(c)
     iszero(c) && return T(eigenvalue_Schwarzschild(s, l))

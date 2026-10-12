@@ -6,7 +6,8 @@ using SpecialFunctions
 using AbstractTrees
 include("binarytree.jl")
 
-# A tree node
+# Data of a node in the derivative tree built by _nth_derivative_spherical_harmonic_direct_eval:
+# the term coeff * cos(theta/2)^ct2_power * sin(theta/2)^st2_power
 struct ct2_st2
     coeff::Float64
     ct2_power::Int
@@ -270,11 +271,12 @@ function _spin_weighted_spherical_harmonic_jacobi_theta_derivative_nonnegative_m
 end
 
 function _spin_weighted_spherical_harmonic_jacobi_value(s::Int, l::Int, m::Int, theta, phi)
-    # Map angles to the principal interval to avoid branch issues from integer powers.
+    # Fold theta into [0, π] using the symmetry (theta, phi) -> (2π - theta, phi + π) of the harmonics.
     _theta, _phi = _fold_theta_phi(theta, phi)
     T = typeof(_theta)
 
-    # Exact boundary values.
+    # Exact values at the poles; a theta within 1e-14 of 0 or π (the tolerance scaled to the precision),
+    # e.g. after the roundoff of the folding above, is treated as the pole.
     if isapprox(_theta, zero(T); atol=_tol(T, 1e-14))
         return (m == -s ? (-1)^s * sqrt((2*l+1)/(4*T(π))) : zero(T)) * cis(m * _phi)
     elseif isapprox(_theta, T(π); atol=_tol(T, 1e-14))
@@ -295,7 +297,7 @@ function _nth_derivative_spherical_harmonic_jacobi(s::Int, l::Int, m::Int, theta
     theta_derivative < 0 && error("theta_derivative must be non-negative")
     phi_derivative < 0 && error("phi_derivative must be non-negative")
 
-    # Find the proper _theta in [0, π] and _phi in [0, 2π) to evaluate.
+    # Fold theta into [0, π] using the symmetry (theta, phi) -> (2π - theta, phi + π) of the harmonics.
     _theta, _phi = _fold_theta_phi(theta, phi)
 
     if m < 0
@@ -401,11 +403,10 @@ end
 
 function _swsh_prefactor(::Type{T}, s::Int, l::Int, m::Int) where {T}
     #=
-        This is consistent with the expression in wikipedia,
-        as well as BHPerturbationToolkit
+        This is consistent with the expression on Wikipedia
+        and in the Black Hole Perturbation Toolkit.
     =#
 
-    # Implement explicit expression here
     common_factor = (-1)^m * sqrt((2*l+1)/(4*T(π)))
     if abs(s) == abs(m)
         return common_factor
