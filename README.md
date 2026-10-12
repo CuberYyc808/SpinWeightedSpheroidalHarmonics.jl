@@ -19,6 +19,8 @@ In particular, we use the following normalization convention:
 ```
 identical to the convention used in the Mathematica package [SpinWeightedSpheroidalHarmonics](https://bhptoolkit.org/SpinWeightedSpheroidalHarmonics/) from the Black Hole Perturbation Toolkit.
 
+For complex spheroidicity the harmonic is normalized with its modulus, $\int_0^{\pi} |{}_{s} S_{\ell m}|^{2} \sin\theta \, d\theta = 1/(2\pi)$, and every method fixes its overall phase by making the overlap with ${}_{s} Y_{\ell m}$ real and positive. The Mathematica package normalizes $\int_0^{\pi} \left[{}_{s} S_{\ell m}\right]^{2} \sin\theta \, d\theta = 1/(2\pi)$ without the complex conjugate; its harmonic is this one divided by $\sqrt{\sum_{\ell'} b_{\ell'}^2}$, where $b_{\ell'}$ are the spherical-harmonic coefficients (`swsh.coeffs` of a spectral harmonic), up to the sign of the square root.
+
 Additionally, we provide two similar functions
 - `spin_weighted_spherical_harmonic` $`\,{}_{s} Y_{\ell m}(\theta, \phi)`$, and
 - `spin_weighted_spherical_eigenvalue`
@@ -101,6 +103,12 @@ spin_weighted_spheroidal_eigenvalue(-2, 2, 2, 7//20; precision=256)   # 7/20 to 
 S = spin_weighted_spheroidal_harmonic(-2, 2, 2, 7//20; precision=256)
 S(big(11) / 10, 0)
 ```
+
+## Examples
+The notebooks in [`examples`](examples) show the package at work: [`plot-SWSH.ipynb`](examples/plot-SWSH.ipynb) plots a
+harmonic and its derivatives, and [`arbitrary-precision.ipynb`](examples/arbitrary-precision.ipynb) covers `BigFloat`,
+complex frequencies, the accuracy of each method and the cost. The [documentation](http://ricokaloklo.github.io/SpinWeightedSpheroidalHarmonics.jl)
+has more examples and the full API.
 
 ## How to cite
 If you have used this code in your research that leads to a publication, please cite the following article:

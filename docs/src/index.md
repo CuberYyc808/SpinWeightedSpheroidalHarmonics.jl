@@ -13,6 +13,8 @@ In particular, we use the following normalization convention:
 ```
 identical to the convention used in the Mathematica package [SpinWeightedSpheroidalHarmonics](https://bhptoolkit.org/SpinWeightedSpheroidalHarmonics/) from the Black Hole Perturbation Toolkit.
 
+For complex spheroidicity the harmonic is normalized with its modulus, $\int_0^{\pi} |{}_{s} S_{\ell m}|^{2} \sin\theta \, d\theta = 1/(2\pi)$, and every method fixes its overall phase by making the overlap with ${}_{s} Y_{\ell m}$ real and positive. The Mathematica package normalizes $\int_0^{\pi} \left[{}_{s} S_{\ell m}\right]^{2} \sin\theta \, d\theta = 1/(2\pi)$ without the complex conjugate; its harmonic is this one divided by $\sqrt{\sum_{\ell'} b_{\ell'}^2}$, where $b_{\ell'}$ are the spherical-harmonic coefficients (`swsh.coeffs` of a spectral harmonic), up to the sign of the square root.
+
 Additionally, we provide two similar functions
 - `spin_weighted_spherical_harmonic` ${}_{s} Y_{\ell m}(\theta, \phi)$, and
 - `spin_weighted_spherical_eigenvalue`

@@ -69,13 +69,42 @@ the number type and its precision; `clear_angular_cache!` empties it.
 
 The eigenpairs of the spectral decomposition are found in `Float64` with LAPACK and refined in the
 working precision on the band matrix (Rayleigh quotient iteration); in `Float64` the LAPACK result
-is returned as before. Where two modes are too close for `Float64` to tell them apart, the mode is
+is returned directly. Where two modes are too close for `Float64` to tell them apart, the mode is
 selected in the working precision (by its position among the eigenvalues for real `c`, by following
 the path for complex `c`), so a wider precision also resolves harmonics that `Float64` cannot. The
 matrix size, Leaver's continued fraction and power series, the Chebyshev representations and the
 tolerances all follow the precision, which keeps each tolerance at its place between the rounding
 and the physical scale. At 256 bits eigenvalues and harmonics are accurate to about ``10^{-70}``,
 less only where the mode itself is ill-conditioned (nearly degenerate with a neighbour).
+
+## Accuracy
+
+Relative errors against a 512-bit reference, the largest over ``\theta`` from pole to pole, for the
+eigenvalue, and for the harmonic with its first two ``\theta``-derivatives relative to the size of each
+(default method):
+
+| mode, spheroidicity | | `Float64` | 128 bits | 256 bits |
+| :--- | :--- | :--- | :--- | :--- |
+| ``(-2, 2, 2)``, ``a = 0.7``, ``\omega = 0.5326 - 0.0808i`` | ``\lambda`` | ``3 \times 10^{-16}`` | ``3 \times 10^{-39}`` | ``2 \times 10^{-77}`` |
+| | ``S, \partial_\theta S, \partial_\theta^2 S`` | ``2 \times 10^{-15}`` | ``2 \times 10^{-38}`` | ``4 \times 10^{-76}`` |
+| ``(-2, 3, 1)``, ``c = 1 - 2i`` | ``\lambda`` | ``2 \times 10^{-14}`` | ``1 \times 10^{-38}`` | ``5 \times 10^{-77}`` |
+| | ``S, \partial_\theta S, \partial_\theta^2 S`` | ``2 \times 10^{-14}`` | ``1 \times 10^{-37}`` | ``2 \times 10^{-76}`` |
+| ``(-2, 20, 2)``, ``c = -1.5 - 0.7i`` | ``\lambda`` | ``2 \times 10^{-16}`` | ``1 \times 10^{-39}`` | ``3 \times 10^{-77}`` |
+| | ``S, \partial_\theta S, \partial_\theta^2 S`` | ``9 \times 10^{-14}`` | ``2 \times 10^{-37}`` | ``1 \times 10^{-75}`` |
+
+The derivatives keep this accuracy at the poles, for every method except the Chebyshev solver
+(`method="chebyshev"`), which loses a few digits in its derivatives near ``\theta = 0`` and ``\pi``.
+
+## Modes that `Float64` cannot resolve
+
+When a mode is closer to a neighbour than `Float64` can tell apart, the harmonic is not returned
+in `Float64`: an error names the mode and the gap. The same mode is resolved in a wider precision,
+given in that precision:
+
+```julia
+spin_weighted_spheroidal_harmonic(-2, 2, 2, -20.0)                    # error: nearly degenerate
+S = spin_weighted_spheroidal_harmonic(-2, 2, 2, -20; precision=256)  # resolved
+```
 
 ## Three points about the input
 

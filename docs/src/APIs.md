@@ -11,6 +11,9 @@ and their return types use
 - [SpinWeightedSpheroidalHarmonicFunction](@ref)
 - [SpinWeightedSphericalHarmonicFunction](@ref)
 
+Every function computes in the floating-point type of its input, and the functions that take a
+spheroidicity also accept the keyword `precision`; see [Arbitrary precision](@ref).
+
 ## Complex frequencies
 
 ```julia
@@ -35,13 +38,25 @@ S = spin_weighted_spheroidal_harmonic(pair)
 Use `backend=:dense` with `spin_weighted_spheroidal_harmonic` or
 `track_angular_mode` to compare with the default backend along the same path.
 
+For complex `c` the harmonic is normalized with its modulus,
+``\int_0^\pi |{}_s S_{\ell m}|^2 \sin\theta \, d\theta = 1/(2\pi)``, and every method fixes its overall
+phase by making the overlap with ``{}_s Y_{\ell m}`` real and positive. To compare with the Mathematica
+package of the Black Hole Perturbation Toolkit, which normalizes ``S^2`` without the complex conjugate,
+divide by ``\sqrt{\sum_{\ell'} b_{\ell'}^2}``, where ``b_{\ell'}`` are the spherical-harmonic coefficients
+(up to the sign of the square root):
+
+```julia
+S = spin_weighted_spheroidal_harmonic(-2, 2, 2, 0.5 - 0.5im)
+S_bhpt(theta, phi) = S(theta, phi) / sqrt(sum(b^2 for b in S.coeffs))
+```
+
 ## Functions
 ```@docs
 spin_weighted_spheroidal_eigenvalue
 ```
 
 ```@docs
-spin_weighted_spheroidal_harmonic
+spin_weighted_spheroidal_harmonic(::Int, ::Any, ::Int, ::Any)
 ```
 
 ```@docs
@@ -58,6 +73,24 @@ spin_weighted_spherical_harmonic
 
 ```@docs
 SpinWeightedSpheroidalHarmonics.SpinWeightedSphericalHarmonicFunction
+```
+
+## Continuation in complex spheroidicity
+
+```@docs
+continue_angular_mode
+track_angular_mode
+spin_weighted_spheroidal_harmonic(::AngularEigenpair)
+angular_observables
+continue_angular_lateral_pair
+angular_precision_certificate
+mirror_angular_parameters
+angular_mirror_residual
+AngularEigenpair
+AngularPathResult
+AngularContinuationError
+AngularCache
+clear_angular_cache!
 ```
 
 ## Types
