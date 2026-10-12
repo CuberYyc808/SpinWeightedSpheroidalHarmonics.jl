@@ -20,14 +20,13 @@ fraction and through the initial guess for λ. The public API requires an intege
 `l` (see `_resolve_spheroidal_method`); a non-integer degree needs a dedicated solver.
 =#
 
-mutable struct LeaverAngularSolution
+struct LeaverAngularSolution
     c
     lambda
     branch_n::Int
     pminus::Int # |m - s|, so that u^{k₋} = cos(θ/2)^pminus
     pplus::Int  # |m + s|, so that (1 - u)^{k₊} = sin(θ/2)^pplus
     coeffs      # series coefficients a_n, normalized to a_0 = 1
-    @atomic theta_fun # Chebyshev representation of the unnormalized S(θ), built on demand for θ-derivatives (atomic: shared solutions may be differentiated from several threads)
 end
 
 # Continued-fraction denominators smaller than this are nudged away from zero
@@ -208,7 +207,7 @@ _leaver_nonconvergence_message(s, l, m, c, n; where=c) = "Leaver continued-fract
 # so that the modes found at two nearby c can be compared
 function _leaver_mode_profile(s::Int, m::Int, c, λ, n::Int)
     coeffs = _leaver_converged_series_coefficients(s, m, c, λ, n)
-    sol = LeaverAngularSolution(c, λ, n, abs(m - s), abs(m + s), coeffs, nothing)
+    sol = LeaverAngularSolution(c, λ, n, abs(m - s), abs(m + s), coeffs)
     values = [_leaver_raw_theta_value(sol, θ) * sqrt(sin(θ)) for θ in _LEAVER_PROFILE_THETA]
     return values ./ sqrt(sum(abs2, values))
 end
@@ -434,6 +433,52 @@ function _leaver_raw_theta_value(sol::LeaverAngularSolution, theta)
 end
 
 #=
+θ-derivatives of the unnormalized S(θ) = exp(2cu) cos(θ/2)^pminus sin(θ/2)^pplus Σ a_n u^n, u = cos²(θ/2),
+from its Taylor coefficients in t at θ = θ0 + t, truncated after t^k ("jets"). Products, powers, the
+exponential and the series are exact operations on the coefficients, so the derivatives are as accurate as
+the value itself and need no division: they hold at the poles too, where cos(θ/2) or sin(θ/2) vanishes.
+The k-th derivative is k! times the k-th coefficient.
+=#
+_jet_mul(a, b) = [sum(a[i+1] * b[k-i+1] for i in 0:k) for k in 0:length(a)-1]
+
+function _jet_pow(a, n::Int)
+    result = [k == 0 ? one(eltype(a)) : zero(eltype(a)) for k in 0:length(a)-1]
+    power = a
+    while n > 0
+        isodd(n) && (result = _jet_mul(result, power))
+        n >>= 1
+        n > 0 && (power = _jet_mul(power, power))
+    end
+    return result
+end
+
+function _jet_exp(g)
+    e = similar(g)
+    e[1] = exp(g[1])
+    for k in 1:length(g)-1
+        e[k+1] = sum(j * g[j+1] * e[k-j+1] for j in 1:k) / k
+    end
+    return e
+end
+
+function _leaver_theta_derivative(sol::LeaverAngularSolution, theta, k::Int)
+    T = typeof(float(theta))
+    cos_half, sin_half = cos(theta / 2), sin(theta / 2)
+    # cos(θ/2 + t/2) and sin(θ/2 + t/2): the j-th derivative of cos is cos, -sin, -cos, sin, … and each brings 1/2
+    scale(j) = inv(T(2)^j * prod(T, 1:j; init=one(T)))
+    C = [(cos_half, -sin_half, -cos_half, sin_half)[j % 4 + 1] * scale(j) for j in 0:k]
+    S = [(sin_half, cos_half, -sin_half, -cos_half)[j % 4 + 1] * scale(j) for j in 0:k]
+    u = _jet_mul(C, C)
+    series = fill(zero(eltype(sol.coeffs)) * zero(T), k + 1)
+    for coefficient in Iterators.reverse(sol.coeffs)
+        series = _jet_mul(series, u)
+        series[1] += coefficient
+    end
+    jet = _jet_mul(_jet_mul(_jet_exp(2 * sol.c .* u), _jet_pow(C, sol.pminus)), _jet_mul(_jet_pow(S, sol.pplus), series))
+    return prod(T, 1:k; init=one(T)) * jet[k+1]
+end
+
+#=
 Fit `f` on [0, π] with a Chebyshev series of fixed length, doubling the length
 until its tail has decayed. Evaluating the Leaver series involves cancellations
 that leave a roundoff floor, and letting ApproxFun construct the Fun adaptively
@@ -457,18 +502,6 @@ function _leaver_chebyshev_fit(f, ::Type{T}, floor; n_start::Int=64, n_max::Int=
         previous_tail = tail
         n *= 2
     end
-end
-
-function _leaver_theta_fun(sol::LeaverAngularSolution)
-    fun = @atomic sol.theta_fun
-    if isnothing(fun)
-        # Concurrent first calls may both build the fit; the first stored value is kept and returned to both.
-        built = _leaver_chebyshev_fit(theta -> _leaver_raw_theta_value(sol, theta), _leaver_real_type(sol),
-            _leaver_series_accuracy(sol))
-        old, _ = @atomicreplace sol.theta_fun nothing => built
-        fun = isnothing(old) ? built : old
-    end
-    return fun
 end
 
 @doc raw"""
@@ -534,7 +567,7 @@ Build the representation of the Leaver series for the eigenvalue `λ`.
 """
 function _leaver_angular_solution(s::Int, m::Int, c, λ; branch_n::Int, nmax::Int=-1)
     coeffs = _leaver_converged_series_coefficients(s, m, c, λ, branch_n; nmax=nmax)
-    sol = LeaverAngularSolution(c, λ, branch_n, abs(m - s), abs(m + s), coeffs, nothing)
+    sol = LeaverAngularSolution(c, λ, branch_n, abs(m - s), abs(m + s), coeffs)
 
     accuracy = _leaver_series_accuracy(sol)
     accuracy > _leaver_max_series_error(_leaver_real_type(sol)) && error("Cancellation in Leaver's power series for (s, m) = ($s, $m), c = $c, branch n = $branch_n leaves it with a relative accuracy of only about $accuracy. Use the spectral decomposition (e.g. method=\"jacobi\"), which does not suffer from this, or a wider floating-point precision.")
@@ -548,7 +581,7 @@ function _nth_derivative_spheroidal_harmonic_leaver(sol::LeaverAngularSolution, 
 
     _theta, _phi = _fold_theta_phi(theta, phi)
 
-    # Note that the derivatives at the two boundary points might be inaccurate
-    S_deriv = theta_derivative == 0 ? _leaver_raw_theta_value(sol, _theta) : differentiate(_leaver_theta_fun(sol), theta_derivative)(_theta)
+    S_deriv = theta_derivative == 0 ? _leaver_raw_theta_value(sol, _theta) :
+        _leaver_theta_derivative(sol, _theta, theta_derivative)
     return S_deriv * cis(m * _phi) * (m * 1im)^phi_derivative
 end

@@ -60,14 +60,16 @@ function _unresolvable_eigenvector_message(s, l, m, c, relative_gap)
         "(relative gap $relative_gap, below $(_eigenvector_gap_tol(T))), so the " *
         "harmonic would be an arbitrary mix of the two. "
     if relative_gap > 10eps(T)
-        return message * "The eigenvalue is still accurate, see " *
-            "spin_weighted_spheroidal_eigenvalue. To get the harmonic, refine it in a wider " *
+        return message * "Pass c in a wider precision (for example precision=256), which resolves the " *
+            "mode. The eigenvalue is still accurate, see " *
+            "spin_weighted_spheroidal_eigenvalue; the harmonic can also be refined in a wider " *
             "precision with Leaver's method, seeded with that eigenvalue: " *
             "spin_weighted_spheroidal_harmonic($s, $l, $m, big($c); method=\"leaver\", " *
             "lambda0=big(spin_weighted_spheroidal_eigenvalue($s, $l, $m, $c)))."
     end
     return message * "Here even the eigenvalue cannot tell the two modes apart in " *
-        "$(_precision_name(T)), so the mode cannot be identified without a wider precision throughout."
+        "$(_precision_name(T)), so the mode cannot be identified without a wider precision throughout: " *
+        "pass c in a wider precision, for example precision=256."
 end
 
 function _determine_matrix_size_N(s::Int, l::Int, m::Int, c=0)
@@ -726,7 +728,7 @@ function _dense_spectral_decomposition(c, s::Int, l::Int, m::Int, N::Int=-1)
         pair = continue_angular_mode(
             s, l, m, float(c); backend=:dense,
             truncation_order=_complex_truncation_order(s, l, m, N, c))
-        return pair.angular_sep, pair.coefficients
+        return pair.angular_sep, _overlap_phase_fixed(pair.coefficients, s, l, m)
     end
     N == -1 || return _dense_real_eigenpair_at_size(c, s, l, m, N)
     N = _determine_matrix_size_N(s, l, m, c)
@@ -855,9 +857,9 @@ function spectral_coefficients(c, s::Int, l::Int, m::Int, N::Int=-1;
     selected_backend = _resolve_spectral_backend(backend, c)
     if c isa Complex && !iszero(imag(c)) &&
             selected_backend != :dense
-        return continue_angular_mode(
+        return _overlap_phase_fixed(continue_angular_mode(
             s, l, m, c;
-            truncation_order=_complex_truncation_order(s, l, m, N, c)).coefficients
+            truncation_order=_complex_truncation_order(s, l, m, N, c)).coefficients, s, l, m)
     end
     _, coeffs = _spectral_decomposition(
         c, s, l, m, N; backend=selected_backend)

@@ -20,6 +20,21 @@ struct AngularCacheKey{T<:AbstractFloat}
     options::NamedTuple # the continuation keywords, which the continued mode also depends on
 end
 
+"""
+    AngularEigenpair{T}
+
+A spin-weighted spheroidal eigenpair at a complex spheroidicity, as returned by
+`continue_angular_mode` and `track_angular_mode`. Pass it to `spin_weighted_spheroidal_harmonic`
+to build the harmonic. `T` is the floating-point type it was computed in.
+
+The main fields are `s`, `l`, `m`, `c`, the eigenvalue `lambda`, `angular_sep` (`lambda - c^2 + 2mc`),
+the spherical-harmonic `coefficients` (unit norm, in the phase of the continuation along the path)
+and `matrix_size`. The others describe how the state was obtained: `residual` (relative residual of
+the eigen-equation), `previous_overlap` and `overlap_margin` (with the previous step, and how much
+larger than the runner-up's), `spectral_gap` (relative distance to the nearest other eigenvalue),
+`eigenvector_condition`, `sheet_id`, `truncation_order`, `precision_bits` (the significand bits of
+`T`) and `status` (`:continued`, or `:near_collision` when the mode is close to another one).
+"""
 struct AngularEigenpair{T<:AbstractFloat}
     s::Int
     l::Int
@@ -42,6 +57,13 @@ struct AngularEigenpair{T<:AbstractFloat}
     status::Symbol
 end
 
+"""
+    AngularPathResult{T}
+
+The result of `track_angular_mode`: `states` (an `AngularEigenpair` for `c = 0`, every intermediate
+step and every point of the path), the `requested_path`, its `sheet_id`, and for a closed path
+`monodromy_overlap` and `lambda_closure_error`. `status` is `:open`, `:closed` or `:monodromy_failed`.
+"""
 struct AngularPathResult{T<:AbstractFloat}
     states::Vector{AngularEigenpair{T}}
     requested_path::Vector{Complex{T}}
@@ -51,6 +73,13 @@ struct AngularPathResult{T<:AbstractFloat}
     status::Symbol
 end
 
+"""
+    AngularContinuationError
+
+Thrown when a step of the continuation cannot be accepted even at the smallest step size, which
+usually means the path runs into an eigenvalue collision or an exceptional point. It records the
+step (`c_from`, `c_to`) and the diagnostics of the last attempt.
+"""
 struct AngularContinuationError <: Exception
     message::String
     c_from::ComplexF64
@@ -73,6 +102,13 @@ function Base.showerror(io::IO, exception::AngularContinuationError)
         " eigenvector_condition=", exception.eigenvector_condition)
 end
 
+"""
+    AngularCache(; max_entries=4096)
+
+A thread-safe cache of continued modes, used by `continue_angular_mode`. When it holds
+`max_entries` results, the oldest one is dropped. `DEFAULT_ANGULAR_CACHE` is the cache used by
+default.
+"""
 mutable struct AngularCache
     values::Dict{Any,Any}
     insertion_order::Vector{Any}
@@ -87,6 +123,11 @@ end
 
 const DEFAULT_ANGULAR_CACHE = AngularCache()
 
+"""
+    clear_angular_cache!(cache=DEFAULT_ANGULAR_CACHE)
+
+Empty `cache` and return it.
+"""
 function clear_angular_cache!(cache::AngularCache=DEFAULT_ANGULAR_CACHE)
     lock(cache.lock) do
         empty!(cache.values)
@@ -755,6 +796,13 @@ function continue_angular_mode(
     end
 end
 
+"""
+    continue_angular_lateral_pair(s, l, m, a, sigma, epsilon; truncation_order=nothing, precision=nothing, kwargs...)
+
+Follow the mode `l` to the two points `c = ±a epsilon - i a sigma` on either side of the imaginary axis,
+along the paths `0 → -i a sigma → c` (with `sigma > 0`, `epsilon > 0`). Return a named tuple `(right, left)`
+of the two `AngularPathResult`s. The remaining keyword arguments are those of `track_angular_mode`.
+"""
 function continue_angular_lateral_pair(
     s::Int,
     l::Int,
@@ -788,6 +836,12 @@ function continue_angular_lateral_pair(
     end
 end
 
+"""
+    mirror_angular_parameters(s, l, m, c)
+
+The parameters `(s, l, -m, -conj(c))` of the mirror mode, whose eigenvalue is the complex conjugate of
+that of `(s, l, m, c)`.
+"""
 @inline function mirror_angular_parameters(
     s::Int,
     l::Int,
@@ -797,6 +851,13 @@ end
     return (s=s, l=l, m=-m, c=-conj(c))
 end
 
+"""
+    angular_mirror_residual(pair, mirrored)
+
+The relative difference between the eigenvalue of `mirrored`, the eigenpair at
+`mirror_angular_parameters` of `pair`, and the complex conjugate of the eigenvalue of `pair`. It is a
+check on both: it vanishes up to roundoff.
+"""
 function angular_mirror_residual(
     pair::AngularEigenpair,
     mirrored::AngularEigenpair,
@@ -834,6 +895,14 @@ function _refine_angular_pair(seed::AngularEigenpair{Float64}, c::Complex{T}, pr
         seed.status)
 end
 
+"""
+    angular_precision_certificate(s, l, m, c; truncation_orders=(24, 32), precision_bits=(128, 160), kwargs...)
+
+Compute the mode `l` at `c` with `continue_angular_mode` at two truncation orders, and at the higher one
+also at two `BigFloat` precisions, and compare them. Return a named tuple with `accepted` (the eigenvalue
+is stable to `1e-12` under truncation and to `1e-14` under precision, the residual is small and the two
+eigenvectors agree), the four eigenpairs and the drifts, overlap, residual and eigenvector condition.
+"""
 function angular_precision_certificate(
     s::Int,
     l::Int,
@@ -884,6 +953,28 @@ function angular_precision_certificate(
 end
 
 
+#=
+The overall phase of a harmonic: its overlap with sYlm, the coefficient of the target mode, real and
+positive, as for real c and in Leaver's method. The states of a path keep the phase of the parallel
+transport, which is what keeps the path continuous; a harmonic takes its phase from the target
+coefficient instead. When that overlap is too small to define a phase (below 1e-3 of the norm, the
+threshold of Leaver's method) the phase is left as it is.
+=#
+function _overlap_phase_fixed(coefficients::AbstractVector, s::Int, l::Int, m::Int)
+    b = coefficients[l - max(abs(s), abs(m)) + 1]
+    (isreal(b) && real(b) > 0) && return coefficients
+    abs(b) > 1e-3 * norm(coefficients) || return coefficients
+    return coefficients .* (abs(b) / b)
+end
+
+"""
+    spin_weighted_spheroidal_harmonic(pair::AngularEigenpair; method="auto")
+
+Build the harmonic from a continued eigenpair (see `continue_angular_mode` and `track_angular_mode`),
+in the floating-point type of the pair. `method` is `"auto"`, `"direct"`, `"jacobi"` or `"chebyshev"`.
+Like every harmonic, it is normalized with its modulus and its phase is fixed by making the overlap
+with the spherical harmonic `l` real and positive, whatever the phase of the pair.
+"""
 function spin_weighted_spheroidal_harmonic(
     pair::AngularEigenpair{T};
     method="auto",
@@ -901,10 +992,11 @@ function spin_weighted_spheroidal_harmonic(
         l_list = construct_all_l_in_matrix(
             pair.s, pair.m, pair.matrix_size)
         normalization = one(real(eltype(pair.coefficients)))
+        coefficients = _overlap_phase_fixed(pair.coefficients, pair.s, pair.l, pair.m)
         if formatted_method == "chebyshev"
             # The eigenpair supplies lambda, and through its coefficients the values at the equator
             S_half, dS_half = _spheroidal_equator_values(T,
-                coefficients_params, pair.coefficients)
+                coefficients_params, coefficients)
             angular_sep = pair.lambda - pair.c^2 + 2 * pair.m * pair.c
             chebyshev_solution = _solve_spheroidal_harmonic_chebyshev(T,
                 pair.s, pair.l, pair.m, pair.c, angular_sep, S_half, dS_half)
@@ -912,22 +1004,29 @@ function spin_weighted_spheroidal_harmonic(
                 SpinWeightedSphericalHarmonicFunction, Nothing}}(
                 nothing, length(l_list))
             return SpinWeightedSpheroidalHarmonicFunction{T}(
-                coefficients_params, pair.coefficients, spherical_harmonics_l,
+                coefficients_params, coefficients, spherical_harmonics_l,
                 normalization, pair.lambda, :chebyshev, chebyshev_solution, nothing, bits)
         end
         spherical_harmonics_l = [
-            abs(pair.coefficients[index]) >= _spherical_coefficient_tol(T) ?
+            abs(coefficients[index]) >= _spherical_coefficient_tol(T) ?
             spin_weighted_spherical_harmonic(
                 pair.s, l_list[index], pair.m; method=formatted_method,
                 precision=_precision_keyword(bits)) :
             nothing for index in eachindex(l_list)
         ]
         SpinWeightedSpheroidalHarmonicFunction{T}(
-            coefficients_params, pair.coefficients, spherical_harmonics_l,
+            coefficients_params, coefficients, spherical_harmonics_l,
             normalization, pair.lambda, :spectral, nothing, nothing, bits)
     end
 end
 
+"""
+    angular_observables(pair::AngularEigenpair, theta, phi=0; derivative_order=2, method="auto")
+
+The value of the harmonic of `pair` at `(theta, phi)` and its `theta`-derivatives up to
+`derivative_order` (`0`, `1` or `2`), with `lambda`, `sheet_id` and `residual` of the pair, as a named
+tuple `(value, first_derivative, second_derivative, lambda, sheet_id, residual)`.
+"""
 function angular_observables(
     pair::AngularEigenpair,
     theta,

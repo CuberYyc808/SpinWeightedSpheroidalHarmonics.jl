@@ -9,7 +9,7 @@ include("continuation.jl")
 include("leaver.jl")
 
 export spin_weighted_spheroidal_harmonic, spin_weighted_spherical_harmonic, spin_weighted_spheroidal_eigenvalue, spin_weighted_spherical_eigenvalue # Expose these functions to the user
-export Teukolsky_lambda_const # For backward compatbility
+export Teukolsky_lambda_const # For backward compatibility
 export AngularEigenpair, AngularPathResult
 export AngularContinuationError, AngularCache, DEFAULT_ANGULAR_CACHE
 export clear_angular_cache!, continue_angular_mode, track_angular_mode
@@ -153,7 +153,7 @@ spin weight `s`, harmonic index `l`, azimuthal index `m`, and spheroidicity `c` 
 Return a SpinWeightedSpheroidalHarmonicFunction object that can be evaluated at any point.
 
 The `method` argument controls how the harmonic is computed:
-- `"auto"`: spectral decomposition with automatic selection of the spherical-harmonic evaluation,
+- `"auto"` (default): spectral decomposition, with the spherical harmonics evaluated by the Jacobi recurrence,
 - `"direct"` or `"jacobi"`: spectral decomposition with that spherical-harmonic backend,
 - `"chebyshev"`: solve the spheroidal ODE directly with Chebyshev pseudo-spectral collocation,
 - `"leaver"`: Leaver's continued-fraction method.
@@ -175,15 +175,18 @@ the continued fraction is truncated, and `tol` and `max_iter` control its Newton
 `cf_depth=-1` and `tol=-1` pick a suitable value automatically, the latter following the
 floating-point precision of `c`.
 
-Note that `"leaver"` fixes the overall phase by making the overlap with ${}_s Y_{lm}$ real and
-positive, matching the convention of the spectral decomposition.
+Every method fixes the overall phase by making the overlap with ${}_s Y_{lm}$ real and positive, so for
+real and complex `c` alike the methods return the same function. (The eigenpairs returned by
+`continue_angular_mode` and `track_angular_mode` keep the phase of the continuation along the path; a
+harmonic built from one has its phase fixed in the same way.)
 
 Two things limit `"leaver"` in a given floating-point precision, and it raises an error rather
 than return a result it cannot resolve in either case. Roundoff in the continued fraction limits
 how sharply the eigenvalue is located, increasingly so as `|c|` grows, and cancellation between
 the (large, alternating) power-series coefficients limits the accuracy of the harmonic itself,
-increasingly so as `l` grows. Both are cured by a wider floating-point precision, which the whole
-method supports — pass, say, `big(c)`. The spectral decomposition suffers from neither.
+increasingly so as `l` grows; the θ-derivatives, which are taken exactly from the series, share
+the accuracy of the values. Both are cured by a wider floating-point precision, which the whole
+method supports — pass, say, `big(c)` or `precision=256`. The spectral decomposition suffers from neither.
 
 The `backend` argument controls how the spectral decomposition is solved (it does not apply to
 `"leaver"`, which does not use a spectral decomposition):
@@ -254,7 +257,7 @@ function _spin_weighted_spheroidal_harmonic(::Type{T}, bits::Int, s::Int, l, m::
     end
     N = length(coefficients)
     coefficients_params = SpectralDecompositionInputParams(s, l, m, c, N)
-    normalization = 1 # already satisfied the normalization cond. \int_{0}^{pi} [nf*S(theta)]^2 sin(theta) d theta = 1
+    normalization = 1 # the coefficients have unit norm, so that \int_{0}^{pi} |S(theta)|^2 sin(theta) d theta = 1/(2pi)
     lambda = angular_sep + c^2 - 2*m*c
 
     l_list = construct_all_l_in_matrix(coefficients_params.s, coefficients_params.m, coefficients_params.N)
@@ -297,9 +300,9 @@ spin weight `s`, harmonic index `l`, and azimuthal index `m`.
 
 Return a SpinWeightedSphericalHarmonicFunction object that can be evaluated at any point.
 
-By default, the method to compute the value is chosen automatically based on the value of the harmonic index `l`.
-When `l < 30`, the direct evaluation method (`method="direct"`) is used where we evaluate the exact analytical solution as shown in Eq. (A8).
-When `l >= 30`, we use a Jacobi polynomial recurrence (`method="jacobi"`) for better high-`l` stability and speed (see https://arxiv.org/abs/2208.03691).
+By default (`method="auto"`) the harmonic is evaluated with a Jacobi polynomial recurrence (`method="jacobi"`, see
+https://arxiv.org/abs/2208.03691), which is stable and fast for every `l`, near the poles too. The direct evaluation of the
+exact analytical sum, Eq. (A8) (`method="direct"`), remains available; it loses digits to cancellation as `l` grows.
 The Chebyshev pseudo-spectral method (`method="chebyshev"`) remains available as an explicit option.
 Method names are case-insensitive.
 
@@ -311,7 +314,7 @@ function spin_weighted_spherical_harmonic(s::Int, l::Int, m::Int; method="auto",
         precision::Union{Nothing, Integer}=nothing)
     method = _format_method_name(method)
     if method == "auto"
-        method = l >= 30 ? "jacobi" : "direct"
+        method = "jacobi"
     end
     _check_precision_keyword(precision)
     T = precision === nothing ? Float64 : BigFloat
