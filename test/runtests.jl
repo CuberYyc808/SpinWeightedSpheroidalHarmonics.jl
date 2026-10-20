@@ -18,6 +18,7 @@ using Test
     S = spin_weighted_spheroidal_harmonic(-2, 2, 2, 0.35)
     @test S.lambda ≈ λ rtol=1e-12
     @test isfinite(S(1.1, 0.3)) && isfinite(S(1.1, 0.3; theta_derivative=2))
+    @test all(value_and_theta_derivative(S, 1.1, 0.3) .≈ (S(1.1, 0.3), S(1.1, 0.3; theta_derivative=1)))
     @test spin_weighted_spheroidal_harmonic(-2, 2, 2, 0.0)(1.1, 0.3) ≈ Y(1.1, 0.3) rtol=1e-12
 
     c = 0.5 - 0.5im

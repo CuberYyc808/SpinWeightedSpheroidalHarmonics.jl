@@ -538,5 +538,82 @@ end
     end
 end
 
+@testset "The harmonic and its θ-derivative in one pass" begin
+    # value_and_theta_derivative returns what the two separate calls return, for every method
+    base = (1e-8, 1e-5, 1e-3, 0.3, π / 2)
+    thetas = (base..., (π - θ for θ in base)...)
+    refused = 0
+    for s in (-2, 2), c in (0.0, 0.5, 2.5, 19.6, 0.5 - 0.2im, 2.5 - 1.0im, 19.6 - 4.0im), l in 2:20, m in -l:l
+        S = try
+            spin_weighted_spheroidal_harmonic(s, l, m, c)
+        catch err
+            # at |c| = 19.6 some modes are nearly degenerate with a neighbour, which Float64 refuses
+            message = err isa AngularContinuationError ? err.message : err isa ErrorException ? err.msg : ""
+            occursin("cannot be resolved", message) || rethrow()
+            refused += 1
+            continue
+        end
+        separate = [(S(θ, 0.7), S(θ, 0.7; theta_derivative=1)) for θ in thetas]
+        one_pass = [value_and_theta_derivative(S, θ, 0.7) for θ in thetas]
+        value_scale = maximum(abs(p[1]) for p in separate)
+        derivative_scale = maximum(abs(p[2]) for p in separate)
+        # measured: values to 1e-14 and derivatives to 1e-13 of their largest size
+        @test maximum(abs(a[1] - b[1]) for (a, b) in zip(separate, one_pass)) <= 1e-13 * value_scale
+        @test maximum(abs(a[2] - b[2]) for (a, b) in zip(separate, one_pass)) <= 1e-12 * derivative_scale
+    end
+    @test refused < 100
+
+    # Near the poles, against the same harmonic evaluated at 256 bits (measured: 2e-14 and 3e-14)
+    pole_thetas = ((θ for θ in (1e-8, 1e-5, 1e-3))..., (π - θ for θ in (1e-8, 1e-5, 1e-3))...)
+    for s in (-2, 2), c in (0.0, 2.5, 2.5 - 1.0im), l in (2, 8, 20), m in unique([-l, -l + 1, -2, -1, 0, 1, 2, l - 1, l])
+        S = spin_weighted_spheroidal_harmonic(s, l, m, c)
+        grid = range(0.02, 3.12; length=32)
+        value_scale = maximum(abs(S(θ, 0.7)) for θ in grid)
+        derivative_scale = maximum(abs(S(θ, 0.7; theta_derivative=1)) for θ in grid)
+        for θ in pole_thetas
+            value, derivative = setprecision(BigFloat, 256) do
+                S(big(θ), big(0.7)), S(big(θ), big(0.7); theta_derivative=1)
+            end
+            one_value, one_derivative = value_and_theta_derivative(S, θ, 0.7)
+            @test abs(one_value - value) <= 1e-13 * value_scale
+            @test abs(one_derivative - derivative) <= 1e-13 * derivative_scale
+            @test abs(S(θ, 0.7; theta_derivative=1) - derivative) <= 1e-13 * derivative_scale
+        end
+    end
+
+    # The vector method gives the scalar results; other methods and the poles fall back to the two calls
+    S = spin_weighted_spheroidal_harmonic(-2, 7, -3, 1.5 - 0.5im)
+    angles = [0.0, 1e-9, 0.4, 2.0, π, 4.0]
+    values, derivatives = value_and_theta_derivative(S, angles, 0.3)
+    @test isequal(values, [value_and_theta_derivative(S, θ, 0.3)[1] for θ in angles])
+    @test isequal(derivatives, [value_and_theta_derivative(S, θ, 0.3)[2] for θ in angles])
+    for θ in (0.0, π)
+        @test isequal(value_and_theta_derivative(S, θ, 0.3), (S(θ, 0.3), S(θ, 0.3; theta_derivative=1)))
+    end
+    for method in ("direct", "chebyshev", "leaver")
+        h = spin_weighted_spheroidal_harmonic(-2, 3, 1, 0.7; method)
+        @test isequal(value_and_theta_derivative(h, 1.1, 0.3), (h(1.1, 0.3), h(1.1, 0.3; theta_derivative=1)))
+    end
+    for method in ("jacobi", "direct")
+        Y = spin_weighted_spherical_harmonic(2, 9, -4; method)
+        value, derivative = value_and_theta_derivative(Y, 1e-6, 0.3)
+        @test value ≈ Y(1e-6, 0.3) rtol=1e-13
+        @test derivative ≈ Y(1e-6, 0.3; theta_derivative=1) rtol=1e-13
+    end
+
+    # BigFloat: the one-pass result keeps the precision of the harmonic
+    B = spin_weighted_spheroidal_harmonic(-2, 5, -3, 7//20 - 1im//10; precision=256)
+    value, derivative = value_and_theta_derivative(B, 1.1, 0.3)
+    @test value isa Complex{BigFloat} && precision(real(value)) == 256
+    @test abs(value - B(1.1, 0.3)) <= 1e-70
+    @test abs(derivative - B(1.1, 0.3; theta_derivative=1)) <= 1e-70
+
+    # No allocation per Float64 call
+    S = spin_weighted_spheroidal_harmonic(-2, 9, 2, 2.5)
+    evaluate(S) = value_and_theta_derivative(S, 1.1, 0.0)
+    evaluate(S)
+    @test (@allocated evaluate(S)) == 0
+end
+
 include("precision.jl")
 include("threads.jl")
