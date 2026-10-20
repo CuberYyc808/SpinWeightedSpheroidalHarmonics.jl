@@ -16,6 +16,7 @@ export clear_angular_cache!, continue_angular_mode, track_angular_mode
 export continue_angular_lateral_pair, mirror_angular_parameters
 export angular_mirror_residual, angular_precision_certificate
 export angular_observables
+export value_and_theta_derivative
 
 # Spherical harmonics whose coefficient is below this in magnitude are left out when the spheroidal
 # harmonic is built and evaluated
@@ -356,6 +357,143 @@ Additionally compute the `theta_derivative`-th derivative with respect to `theta
     else
         error("Unknown method $(swsh_func.method) for evaluating spin-weighted spherical harmonic.")
     end
+end
+
+@doc raw"""
+    value_and_theta_derivative(harmonic, theta, phi=0)
+    value_and_theta_derivative(harmonic, thetas::AbstractVector, phi=0)
+
+Evaluate a spin-weighted spheroidal or spherical harmonic and its first derivative with respect to
+`theta` together, and return them as a tuple `(S, dS/dtheta)`; for a vector of angles, return the
+tuple of the two vectors. The results are those of `harmonic(theta, phi)` and
+`harmonic(theta, phi; theta_derivative=1)`, in the same floating-point type and precision.
+
+For a harmonic built with the Jacobi recurrence (the default, `method="auto"` or `"jacobi"`, of
+`spin_weighted_spheroidal_harmonic` and `spin_weighted_spherical_harmonic`) the two are computed in
+one pass, which is several times faster than the two separate calls: the Jacobi polynomials of all
+the spherical harmonics in the expansion come from one recurrence for the value and one for the
+derivative. The evaluation is accurate up to the poles. For the other methods, and at the poles
+themselves, this is the same as the two separate calls.
+
+# Example
+```julia
+S = spin_weighted_spheroidal_harmonic(-2, 2, 2, 0.35)
+value, derivative = value_and_theta_derivative(S, 1.1, 0.3)
+values, derivatives = value_and_theta_derivative(S, range(0, π; length=101))
+```
+"""
+function value_and_theta_derivative(harmonic::SpinWeightedSpheroidalHarmonicFunction{T}, theta, phi=0) where {T}
+    # As _evaluate_at, written out so that a Float64 evaluation does not allocate
+    R = _float_type(zero(T), theta, phi)
+    return _with_precision(R, max(harmonic.precision, _input_precision(theta, phi))) do
+        _value_and_theta_derivative(harmonic, R(theta), R(phi))::NTuple{2, Complex{R}}
+    end
+end
+
+function value_and_theta_derivative(harmonic::SpinWeightedSphericalHarmonicFunction{T}, theta, phi=0) where {T}
+    # As _evaluate_at, written out so that a Float64 evaluation does not allocate
+    R = _float_type(zero(T), theta, phi)
+    return _with_precision(R, max(harmonic.precision, _input_precision(theta, phi))) do
+        _value_and_theta_derivative(harmonic, R(theta), R(phi))::NTuple{2, Complex{R}}
+    end
+end
+
+function value_and_theta_derivative(harmonic::SpinWeightedSpheroidalHarmonicFunction{T}, thetas::AbstractVector, phi=0) where {T}
+    return _values_and_theta_derivatives(harmonic, T, thetas, phi)
+end
+
+function value_and_theta_derivative(harmonic::SpinWeightedSphericalHarmonicFunction{T}, thetas::AbstractVector, phi=0) where {T}
+    return _values_and_theta_derivatives(harmonic, T, thetas, phi)
+end
+
+# As _evaluate_at, for many angles
+function _values_and_theta_derivatives(harmonic, ::Type{T}, thetas::AbstractVector, phi) where {T}
+    R = _float_type(zero(T), zero(eltype(thetas)), phi)
+    return _with_precision(R, max(harmonic.precision, _input_precision(thetas, phi))) do
+        values = Vector{Complex{R}}(undef, length(thetas))
+        derivatives = similar(values)
+        _values_and_theta_derivatives!(values, derivatives, harmonic, thetas, R(phi))
+        values, derivatives
+    end
+end
+
+#=
+The one-pass sum is used for a harmonic evaluated with the Jacobi recurrence; the arguments it is
+given have concrete types (the harmonic stores its coefficients untyped), so that the angles are
+evaluated without allocating. Any other harmonic is evaluated by the two separate calls.
+=#
+function _one_pass_harmonics(harmonic::SpinWeightedSpheroidalHarmonicFunction)
+    harmonic.method == :spectral || return nothing
+    harmonics = harmonic.spherical_harmonics_l
+    first_index = findfirst(!isnothing, harmonics)
+    first_index === nothing && return nothing
+    return harmonics[first_index].method == :jacobi ? harmonics : nothing
+end
+
+function _value_and_theta_derivative(harmonic::SpinWeightedSpheroidalHarmonicFunction{T}, theta, phi) where {T}
+    harmonics = _one_pass_harmonics(harmonic)
+    harmonics === nothing && return _two_calls(harmonic, theta, phi)
+    params = harmonic.params
+    lmin = max(abs(params.s), abs(params.m))
+    coefficients, normalization = harmonic.coeffs, harmonic.normalization_const
+    # The types a spectral harmonic stores, spelled out so that the call below is resolved statically
+    if coefficients isa Vector{Complex{T}} && normalization isa Int
+        return _one_pass_at(harmonic, params.s, params.m, lmin, lmin + params.N - 1,
+            coefficients, harmonics, normalization, theta, phi)
+    elseif coefficients isa Vector{Complex{T}} && normalization isa T
+        return _one_pass_at(harmonic, params.s, params.m, lmin, lmin + params.N - 1,
+            coefficients, harmonics, normalization, theta, phi)
+    end
+    return _one_pass_at(harmonic, params.s, params.m, lmin, lmin + params.N - 1,
+        coefficients, harmonics, normalization, theta, phi)::NTuple{2, Complex{typeof(theta)}}
+end
+
+_value_and_theta_derivative(harmonic::SpinWeightedSphericalHarmonicFunction, theta, phi) =
+    harmonic.method == :jacobi ?
+        _one_pass_at(harmonic, harmonic.s, harmonic.m, harmonic.l, harmonic.l, nothing, nothing, 1, theta, phi) :
+        _two_calls(harmonic, theta, phi)
+
+function _values_and_theta_derivatives!(values, derivatives, harmonic::SpinWeightedSpheroidalHarmonicFunction, thetas, phi)
+    harmonics = _one_pass_harmonics(harmonic)
+    harmonics === nothing && return _two_calls!(values, derivatives, harmonic, thetas, phi)
+    params = harmonic.params
+    lmin = max(abs(params.s), abs(params.m))
+    return _one_pass_at!(values, derivatives, harmonic, params.s, params.m, lmin, lmin + params.N - 1,
+        harmonic.coeffs, harmonics, harmonic.normalization_const, thetas, phi)
+end
+
+_values_and_theta_derivatives!(values, derivatives, harmonic::SpinWeightedSphericalHarmonicFunction, thetas, phi) =
+    harmonic.method == :jacobi ?
+        _one_pass_at!(values, derivatives, harmonic, harmonic.s, harmonic.m, harmonic.l, harmonic.l, nothing, nothing, 1, thetas, phi) :
+        _two_calls!(values, derivatives, harmonic, thetas, phi)
+
+function _two_calls(harmonic, theta, phi)
+    C = Complex{typeof(theta)}
+    return convert(C, harmonic(theta, phi))::C, convert(C, harmonic(theta, phi; theta_derivative=1))::C
+end
+
+function _two_calls!(values, derivatives, harmonic, thetas, phi)
+    for (i, theta) in enumerate(thetas)
+        values[i], derivatives[i] = _two_calls(harmonic, real(eltype(values))(theta), phi)
+    end
+end
+
+function _one_pass_at!(values, derivatives, harmonic, s, m, lmin, lmax, coefficients, harmonics, normalization, thetas, phi)
+    for (i, theta) in enumerate(thetas)
+        values[i], derivatives[i] = _one_pass_at(harmonic, s, m, lmin, lmax, coefficients, harmonics, normalization,
+            real(eltype(values))(theta), phi)
+    end
+end
+
+function _one_pass_at(harmonic, s, m, lmin, lmax, coefficients, harmonics, normalization, theta, phi)
+    _theta, _phi = _fold_theta_phi(theta, phi)
+    # At the poles the two evaluations take their exact pole values
+    _near_pole(_theta) && return _two_calls(harmonic, theta, phi)
+    weight = coefficients === nothing ? (l -> 1) :
+        (l -> (i = l - lmin + 1; harmonics[i] === nothing ? nothing : coefficients[i]))
+    value, derivative = _jacobi_value_and_theta_derivative(weight, s, m, lmin, lmax, _theta, _phi)
+    C = Complex{typeof(theta)}
+    return convert(C, value / normalization), convert(C, derivative / normalization)
 end
 
 @doc raw"""

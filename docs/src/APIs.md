@@ -5,6 +5,7 @@ The main functions are
 - [`spin_weighted_spheroidal_harmonic`](@ref)
 - [`spin_weighted_spherical_eigenvalue`](@ref)
 - [`spin_weighted_spherical_harmonic`](@ref)
+- [`value_and_theta_derivative`](@ref), which evaluates a harmonic and its ``\theta``-derivative in one pass
 
 and their return types use
 - [SpectralDecompositionInputParams](@ref)
@@ -61,6 +62,10 @@ spin_weighted_spheroidal_harmonic(::Int, ::Any, ::Int, ::Any)
 
 ```@docs
 SpinWeightedSpheroidalHarmonics.SpinWeightedSpheroidalHarmonicFunction
+```
+
+```@docs
+value_and_theta_derivative
 ```
 
 ```@docs

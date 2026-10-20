@@ -321,6 +321,97 @@ function _nth_derivative_spherical_harmonic_jacobi(s::Int, l::Int, m::Int, theta
     return theta_part * cis(m * _phi) * (m * 1im)^phi_derivative
 end
 
+#=
+S and dS/dθ of a sum Σ_l w_l sYlm(θ, φ) over consecutive l of one (s, m), in one pass. The Jacobi
+polynomials of every l come from one recurrence for the value and one for the derivative (their
+parameters do not depend on l), run along with the sum, and the powers of sin(θ/2) and cos(θ/2) are
+shared. The terms are those of _jacobi_term and _differentiate_jacobi_terms, using
+dP_n^(α,β)(cos θ)/dθ = -(n + α + β + 1)/2 sin θ P_{n-1}^(α+1,β+1)(cos θ): a negative parameter is taken
+out by the same identity, so no power is negative and the value and the derivative stay accurate near
+the poles. Negative m goes through the reflection (s, m) -> (-s, -m), as in
+_spin_weighted_spherical_harmonic_jacobi_value; the core is then real, so the reflection only changes
+the overall sign and the phase. `weight(l)` is w_l, or `nothing` for a harmonic left out of the sum;
+theta must lie in (0, π), away from the poles (see _near_pole). Nothing is allocated in Float64.
+=#
+function _jacobi_value_and_theta_derivative(weight, s::Int, m::Int, lmin::Int, lmax::Int, theta, phi)
+    sc, mc = m < 0 ? (-s, -m) : (s, m)
+    α, β = mc + sc, mc - sc
+    x = cos(theta)
+    st2 = sin(theta / 2)
+    ct2 = cos(theta / 2)
+    T = typeof(x)
+    α0, β0, da0, db0, k0 = _jacobi_shift(α, β)
+    α1, β1, da1, db1, k1 = _jacobi_shift(α + 1, β + 1)
+    # the powers of sin(θ/2) and cos(θ/2) of the value and of the three terms of the derivative
+    sv, cv = st2^(α + da0), ct2^(β + db0)
+    sa, ca = α != 0 ? st2^(α - 1 + da0) : zero(T), ct2^(β + 1 + db0)
+    sb, cb = st2^(α + 1 + da0), β != 0 ? ct2^(β - 1 + db0) : zero(T)
+    sd, cd = st2^(α + 1 + da1), ct2^(β + 1 + db1)
+    # P_j0 of the value and P_j1 of the derivative, with their predecessors
+    j0, p0, q0 = 0, one(T), zero(T)
+    j1, p1, q1 = 0, one(T), zero(T)
+    value = derivative = zero(T) * zero(weight(lmin) === nothing ? zero(T) : weight(lmin))
+    for l in lmin:lmax
+        w = weight(l)
+        w === nothing && continue
+        n = l - mc
+        while j0 < n - k0
+            j0, p0, q0 = j0 + 1, _jacobi_next(j0, p0, q0, α0, β0, x), p0
+        end
+        Q = _jacobi_shift_ratio(n, α, β, x) * p0
+        d = zero(T)
+        α != 0 && (d += (T(α) / 2) * sa * ca * Q)
+        β != 0 && (d -= (T(β) / 2) * sb * cb * Q)
+        if n > 0
+            while j1 < n - 1 - k1
+                j1, p1, q1 = j1 + 1, _jacobi_next(j1, p1, q1, α1, β1, x), p1
+            end
+            d -= (n + α + β + 1) * sd * cd * _jacobi_shift_ratio(n - 1, α + 1, β + 1, x) * p1
+        end
+        prefactor = _swsh_prefactor(T, sc, l, mc)
+        value += w * (prefactor * (sv * cv * Q))
+        derivative += w * (prefactor * d)
+    end
+    phase = (m < 0 ? (-1)^(s - m) : 1) * cis(m * phi)
+    return value * phase, derivative * phase
+end
+
+# P_{j+1}^(α,β)(x) from P_j = pj and P_{j-1} = pjm1, by the recurrence of _jacobi_polynomial_recurrence
+@inline function _jacobi_next(j::Int, pj, pjm1, α::Int, β::Int, x)
+    T = typeof(x)
+    αf, βf = T(α), T(β)
+    j == 0 && return 0.5 * ((2 + αf + βf) * x + (αf - βf))
+    kf = T(j)
+    A = 2 * (kf + 1) * (kf + αf + βf + 1) * (2 * kf + αf + βf)
+    B = (2 * kf + αf + βf + 1) * ((2 * kf + αf + βf + 2) * (2 * kf + αf + βf) * x + αf^2 - βf^2)
+    C = 2 * (kf + αf) * (kf + βf) * (2 * kf + αf + βf + 2)
+    return (B * pj - C * pjm1) / A
+end
+
+# The identity of _jacobi_term: P_n^(α,β) = ratio(n) sin(θ/2)^da cos(θ/2)^db P_{n-k}^(α',β'), with
+# (α', β', da, db, k)
+_jacobi_shift(α::Int, β::Int) = α < 0 ? (-α, β, -2α, 0, -α) : β < 0 ? (α, -β, 0, -2β, -β) : (α, β, 0, 0, 0)
+
+function _jacobi_shift_ratio(n::Int, α::Int, β::Int, x)
+    ratio = one(x)
+    if α < 0
+        for i in 0:-α-1
+            ratio *= one(x) * (n + β - i) / (n - i)
+        end
+        return isodd(α) ? -ratio : ratio
+    elseif β < 0
+        for i in 0:-β-1
+            ratio *= one(x) * (n + α - i) / (n - i)
+        end
+    end
+    return ratio
+end
+
+# Within the pole tolerance of _spin_weighted_spherical_harmonic_jacobi_value, which takes the exact
+# pole value there
+_near_pole(theta) = (T = typeof(theta); isapprox(theta, zero(T); atol=_tol(T, 1e-14)) ||
+    isapprox(theta, T(π); atol=_tol(T, 1e-14)))
+
 # The terms coeff * cos(θ/2)^a * sin(θ/2)^b of the theta_derivative-th derivative of
 # cos(θ/2)^a0 * sin(θ/2)^b0, in the order the derivative tree lists its leaves, zero terms dropped
 # (the coefficients are exact: products of ±1/2 and integers)
