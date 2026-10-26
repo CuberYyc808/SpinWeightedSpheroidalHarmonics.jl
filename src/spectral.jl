@@ -44,6 +44,9 @@ one allowed by the eigenvector overlap tolerance (1 - overlap ≈ angle^2/2), so
 cannot be resolved in T even though the eigenvalue still can.
 =#
 _eigenvector_gap_tol(::Type{T}) where {T} = eps(T) / sqrt(2 * _eigenvector_overlap_tol(T))
+# Working precision (bits) in which a Float64 eigenvalue is recomputed when its mode cannot be
+# followed in Float64 (see Teukolsky_lambda_const)
+const SWSH_NEAR_DEGENERATE_PRECISION = 128
 
 #=
 The eigenvalues and eigenvectors are first found in Float64 with LAPACK (the seed). In Float64
@@ -910,9 +913,19 @@ function Teukolsky_lambda_const(c, s::Int, l::Int, m::Int, N::Int=-1)
     if c isa Complex
         iszero(imag(c)) &&
             return Teukolsky_lambda_const(real(c), s, l, m, N)
-        return continue_angular_mode(
-            s, l, m, c;
-            truncation_order=_complex_truncation_order(s, l, m, N, c)).lambda
+        truncation_order = _complex_truncation_order(s, l, m, N, c)
+        try
+            return continue_angular_mode(s, l, m, c; truncation_order).lambda
+        catch exception
+            # Where the mode is nearly degenerate with a neighbour, Float64 cannot tell their
+            # eigenvectors apart, so the path cannot be followed by overlap; the eigenvalue is still
+            # accurate. Only that case is retried, in the wider precision that takes the path over
+            # (see _advance_in_precision!), and the eigenvalue is rounded back
+            (exception isa AngularContinuationError && _seed_is_final(real(typeof(c))) &&
+                exception.spectral_gap < _eigenvector_gap_tol(Float64)) || rethrow()
+            return oftype(c, continue_angular_mode(s, l, m, c; truncation_order,
+                precision=SWSH_NEAR_DEGENERATE_PRECISION).lambda)
+        end
     end
     angular_sep_const(c, s, l, m, N) + c^2 - 2*m*c
 end
