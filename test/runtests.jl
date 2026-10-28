@@ -25,6 +25,9 @@ using Test
     Sc = spin_weighted_spheroidal_harmonic(-2, 2, 2, c)
     @test Sc.lambda ≈ spin_weighted_spheroidal_eigenvalue(-2, 2, 2, c) rtol=1e-12
     @test isfinite(Sc(1.1, 0.3))
+    Sa = spin_weighted_spheroidal_harmonic(-2, 2, 2, c; normalization=:analytic)
+    @test Sa.lambda == Sc.lambda
+    @test sum(b^2 for b in Sa.coeffs) ≈ 1 rtol=1e-13
 
     λbig = spin_weighted_spheroidal_eigenvalue(-2, 2, 2, 7//20; precision=128)
     @test λbig isa BigFloat && precision(λbig) == 128

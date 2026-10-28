@@ -538,6 +538,70 @@ end
     end
 end
 
+@testset "Analytic normalization for complex c" begin
+    # Gauss-Legendre quadrature in cos θ for 2π ∫ f(θ) sin θ dθ
+    J = SymTridiagonal(zeros(120), [k / sqrt(4k^2 - 1) for k in 1:119])
+    nodes, vectors = eigen(J)
+    thetas, weights = acos.(nodes), 2π .* 2 .* vectors[1, :] .^ 2
+    squared_integral(S) = sum(weights .* S.(thetas, 0.0) .^ 2)
+
+    # Real c: the two normalizations give the same harmonic, digit for digit
+    for c in (0.35, 2.5, -1.2), method in ("auto", "chebyshev", "leaver")
+        modulus = spin_weighted_spheroidal_harmonic(-2, 3, 2, c; method)
+        analytic = spin_weighted_spheroidal_harmonic(-2, 3, 2, c; method, normalization=:analytic)
+        @test analytic.lambda == modulus.lambda
+        for θ in (0.3, 1.1, 2.5)
+            @test analytic(θ, 0.4) == modulus(θ, 0.4)
+            @test analytic(θ, 0.4; theta_derivative=1) == modulus(θ, 0.4; theta_derivative=1)
+        end
+    end
+
+    # Complex c = aω at (approximate) Kerr quasinormal frequencies of s = -2, n = 0..3: ∫S² dΩ = 1,
+    # while the modulus normalization misses it by 1e-4 to 1e-2; the eigenvalue is unchanged
+    omegas = Dict(
+        (2, 0.3) => (0.4206 - 0.0876im, 0.4011 - 0.2654im, 0.3671 - 0.4496im, 0.3293 - 0.6378im),
+        (2, 0.7) => (0.5326 - 0.0808im, 0.5212 - 0.2445im, 0.4999 - 0.4128im, 0.4713 - 0.5864im),
+        (2, 0.9) => (0.6716 - 0.0649im, 0.6647 - 0.1956im, 0.6514 - 0.3284im, 0.6318 - 0.4641im),
+        (3, 0.3) => (0.6604 - 0.0904im, 0.6460 - 0.2731im, 0.6197 - 0.4606im, 0.5861 - 0.6521im),
+        (3, 0.7) => (0.8017 - 0.0841im, 0.7926 - 0.2532im, 0.7751 - 0.4249im, 0.7509 - 0.5996im),
+        (3, 0.9) => (0.9785 - 0.0688im, 0.9734 - 0.2068im, 0.9632 - 0.3459im, 0.9480 - 0.4864im))
+    for ((l, a), frequencies) in omegas, (n, omega) in enumerate(frequencies)
+        c = a * omega
+        modulus = spin_weighted_spheroidal_harmonic(-2, l, l, c)
+        analytic = spin_weighted_spheroidal_harmonic(-2, l, l, c; normalization=:analytic)
+        @test analytic.lambda == modulus.lambda
+        @test abs(squared_integral(analytic) - 1) <= 1e-12
+        @test abs(squared_integral(modulus) - 1) > 1e-4
+        # The other methods agree with the spectral decomposition
+        if n in (1, 4)
+            for method in ("chebyshev", "leaver")
+                h = spin_weighted_spheroidal_harmonic(-2, l, l, c; method, normalization=:analytic)
+                @test h(1.1, 0.4) ≈ analytic(1.1, 0.4) rtol=1e-10
+            end
+            for h in (spin_weighted_spheroidal_harmonic(-2, l, l, c; backend="dense", normalization=:analytic),
+                      spin_weighted_spheroidal_harmonic(continue_angular_mode(-2, l, l, c); normalization=:analytic))
+                @test h(1.1, 0.4) ≈ analytic(1.1, 0.4) rtol=1e-10
+            end
+        end
+    end
+
+    # Analyticity: the derivative in c along the real and the imaginary direction agree
+    # (Cauchy-Riemann) with the analytic normalization, but not with the modulus
+    h = 1e-4
+    for (l, c) in ((2, 0.7 * (0.4713 - 0.5864im)), (3, 0.9 * (0.6318 - 0.4641im)))
+        mismatch(normalization) = begin
+            S(c) = spin_weighted_spheroidal_harmonic(-2, l, l, c; normalization)(1.1, 0.0)
+            along_real = (S(c + h) - S(c - h)) / 2h
+            along_imaginary = (S(c + im * h) - S(c - im * h)) / (2im * h)
+            abs(along_real - along_imaginary) / abs(along_real)
+        end
+        @test mismatch(:analytic) <= 1e-7
+        @test mismatch(:modulus) >= 1e-2
+    end
+
+    @test_throws ArgumentError spin_weighted_spheroidal_harmonic(-2, 2, 2, 0.5 - 0.5im; normalization=:bhpt)
+end
+
 @testset "The harmonic and its θ-derivative in one pass" begin
     # value_and_theta_derivative returns what the two separate calls return, for every method
     base = (1e-8, 1e-5, 1e-3, 0.3, π / 2)

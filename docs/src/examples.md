@@ -81,8 +81,11 @@ S.lambda
 S(1.1, 0.3), S(1.1, 0.3; theta_derivative=2)
 ```
 The harmonic is normalized with its modulus, and its phase is fixed by making its overlap with
-``{}_{-2}Y_{22}`` real and positive (see [APIs](@ref) for the conversion to the Black Hole Perturbation
-Toolkit convention).
+``{}_{-2}Y_{22}`` real and positive. For a quasinormal-mode residue, which needs the analytic
+continuation of the harmonic in `c`, normalize ``\int S^2 \, d\Omega = 1`` instead (see [APIs](@ref)):
+```julia
+S = spin_weighted_spheroidal_harmonic(-2, 2, 2, a * omega; normalization=:analytic)
+```
 
 # Example 4: More digits
 The same harmonic to 256 bits. A rational input is rounded once, in the target precision, and the

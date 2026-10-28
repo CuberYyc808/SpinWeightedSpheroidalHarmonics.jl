@@ -513,7 +513,7 @@ function _leaver_chebyshev_fit(f, ::Type{T}, floor; n_start::Int=64, n_max::Int=
 end
 
 @doc raw"""
-    _leaver_normalization_const(sol::LeaverAngularSolution, s::Int, l, m::Int)
+    _leaver_normalization_const(sol::LeaverAngularSolution, s::Int, l, m::Int; analytic=false)
 
 Compute the complex constant `K` such that `S = S_raw / K` follows the same
 convention as the spectral decomposition, namely
@@ -523,10 +523,22 @@ overlap ``\langle {}_s Y_{lm} | S \rangle`` real and positive.
 The phase can only be fixed this way when `l` is an integer; for a continued
 (non-integer) `l` there is no spherical harmonic to project onto and we instead
 keep the natural Leaver convention `a_0 = 1`.
+
+With `analytic=true` and complex `c`, `K` instead makes
+``\int_0^\pi S(\theta, 0)^2 \sin\theta \, d\theta = 1/(2\pi)``, the square root taken
+so that the overlap with ``{}_s Y_{lm}`` lies in the right half-plane (for real `c` the two agree).
 """
-function _leaver_normalization_const(sol::LeaverAngularSolution, s::Int, l, m::Int)
+function _leaver_normalization_const(sol::LeaverAngularSolution, s::Int, l, m::Int; analytic::Bool=false)
     T = _leaver_real_type(sol)
     floor = _leaver_series_accuracy(sol)
+    if analytic && !isreal(sol.c) && l isa Integer
+        squared_integral = sum(_leaver_chebyshev_fit(theta -> _leaver_raw_theta_value(sol, theta)^2 * sin(theta), T, floor))
+        scale = sqrt(2T(π) * squared_integral)
+        # sYlm(theta, 0) is real, so the overlap needs no conjugation either
+        spherical = spin_weighted_spherical_harmonic(s, Int(l), m; precision=_precision_keyword(_precision_bits(T)))
+        overlap = sum(_leaver_chebyshev_fit(theta -> real(spherical(theta, zero(T))) * _leaver_raw_theta_value(sol, theta) * sin(theta), T, floor))
+        return real(overlap / scale) < 0 ? -scale : scale
+    end
     theta_integral = sum(_leaver_chebyshev_fit(theta -> abs2(_leaver_raw_theta_value(sol, theta)) * sin(theta), T, floor))
     theta_integral <= 0 && error("Could not normalize the Leaver spheroidal harmonic: the norm is non-positive.")
     magnitude = sqrt(2T(π) * theta_integral)

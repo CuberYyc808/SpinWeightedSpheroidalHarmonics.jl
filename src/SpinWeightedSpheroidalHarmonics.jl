@@ -33,6 +33,25 @@ function _format_method_name(method)
     error("Does not understand method $method. Supported values are auto, direct, chebyshev, jacobi, leaver (case-insensitive).")
 end
 
+function _format_normalization(normalization)
+    normalized = Symbol(lowercase(strip(String(normalization))))
+    normalized in (:modulus, :analytic) && return normalized
+    throw(ArgumentError("Does not understand normalization $normalization. Supported values are :modulus and :analytic."))
+end
+
+#=
+The coefficients of a harmonic rescaled to the analytic normalization: since sYlm(theta, 0) is real,
+\int S^2 dΩ (with S(theta, 0), not conj(S) S) is the sum of the squared coefficients, which is made 1.
+Of the two square roots, the one that keeps the overlap with sYlm in the right half-plane is taken,
+continuous with real c, where the coefficients are real and are returned as they are.
+=#
+function _analytically_normalized(coefficients::AbstractVector, s::Int, l::Int, m::Int)
+    all(isreal, coefficients) && return coefficients
+    scale = sqrt(sum(x -> x^2, coefficients))
+    real(coefficients[l - max(abs(s), abs(m)) + 1] / scale) < 0 && (scale = -scale)
+    return coefficients ./ scale
+end
+
 # T is the floating-point type the harmonic was built in; evaluation runs in the wider of T and the
 # type of the angles, at the BigFloat precision the harmonic was built with (0 when T carries it)
 struct SpinWeightedSphericalHarmonicFunction{T<:AbstractFloat}
@@ -147,7 +166,7 @@ function _resolve_spheroidal_method(method, s::Int, l, m::Int)
 end
 
 @doc raw"""
-    spin_weighted_spheroidal_harmonic(s::Int, l, m::Int, c; N::Int=-1, method="auto", backend="auto", branch_n=nothing, lambda=nothing, lambda0=nothing, cf_depth::Int=-1, tol=-1, max_iter::Int=80, precision=nothing)
+    spin_weighted_spheroidal_harmonic(s::Int, l, m::Int, c; N::Int=-1, method="auto", backend="auto", branch_n=nothing, lambda=nothing, lambda0=nothing, cf_depth::Int=-1, tol=-1, max_iter::Int=80, precision=nothing, normalization=:modulus)
 
 Construct the spin-weighted spheroidal harmonic of
 spin weight `s`, harmonic index `l`, azimuthal index `m`, and spheroidicity `c` ($c = a\omega$).
@@ -183,6 +202,15 @@ real and complex `c` alike the methods return the same function. (The eigenpairs
 `continue_angular_mode` and `track_angular_mode` keep the phase of the continuation along the path; a
 harmonic built from one has its phase fixed in the same way.)
 
+The `normalization` argument chooses between two normalizations, which coincide for real `c`:
+- `:modulus` (default): ``\int |S|^2 \, d\Omega = 1``. For complex `c` the normalization constant
+  then involves ``\bar{S}`` and is not an analytic function of `c`, so neither is the harmonic.
+- `:analytic`: ``\int S^2 \, d\Omega = 2\pi \int_0^\pi S(\theta, 0)^2 \sin\theta \, d\theta = 1``,
+  without complex conjugation. The harmonic is then the analytic continuation in `c` of the harmonic
+  for real `c` (the overlap with ${}_s Y_{lm}$ is the continuation of a positive number, no longer
+  real), which is what quasinormal-mode residues, with complex ``c = a\omega``, need.
+The eigenvalue does not depend on the normalization.
+
 Two things limit `"leaver"` in a given floating-point precision, and it raises an error rather
 than return a result it cannot resolve in either case. Roundoff in the continued fraction limits
 how sharply the eigenvalue is located, increasingly so as `|c|` grows, and cancellation between
@@ -214,28 +242,31 @@ precision: it evaluates at that precision whatever precision is in effect when i
 function spin_weighted_spheroidal_harmonic(s::Int, l, m::Int, c;
         N::Int=-1, method="auto", backend="auto",
         branch_n::Union{Nothing, Int}=nothing, lambda=nothing, lambda0=nothing,
-        cf_depth::Int=-1, tol=-1, max_iter::Int=80, precision::Union{Nothing, Integer}=nothing)
+        cf_depth::Int=-1, tol=-1, max_iter::Int=80, precision::Union{Nothing, Integer}=nothing,
+        normalization=:modulus)
 
     method = _resolve_spheroidal_method(method, s, l, m)
+    normalization = _format_normalization(normalization)
     _check_precision_keyword(precision)
     c, lambda, lambda0 = (_with_precision_keyword(x, precision) for x in (c, lambda, lambda0))
     T = method == "leaver" ? _float_type(c, filter(!isnothing, (lambda, lambda0))...) : _float_type(c)
     bits = precision === nothing ? _input_precision(c, lambda, lambda0) : precision
     return _with_precision(T, bits) do
         _spin_weighted_spheroidal_harmonic(T, bits, s, l, m, _to_float(T, c), method, N, backend,
-            branch_n, lambda, lambda0, cf_depth, tol, max_iter)
+            branch_n, lambda, lambda0, cf_depth, tol, max_iter, normalization)
     end
 end
 
 function _spin_weighted_spheroidal_harmonic(::Type{T}, bits::Int, s::Int, l, m::Int, c, method, N, backend,
-        branch_n, lambda, lambda0, cf_depth, tol, max_iter) where {T}
+        branch_n, lambda, lambda0, cf_depth, tol, max_iter, normalization_convention) where {T}
     if method == "leaver"
         _spectral_backend(backend) == :auto || throw(ArgumentError(
             "backend=$backend selects a spectral-decomposition solver, which method=\"leaver\" does not use."))
         branch = isnothing(branch_n) ? _leaver_branch_index(s, m, l) : branch_n
         lambda = isnothing(lambda) ? _leaver_eigenvalue(s, l, m, c; branch_n=branch, lambda0=lambda0, cf_depth=cf_depth, tol=tol, max_iter=max_iter) : lambda
         leaver_solution = _leaver_angular_solution(s, m, c, lambda; branch_n=branch, nmax=N)
-        normalization = _leaver_normalization_const(leaver_solution, s, l, m)
+        normalization = _leaver_normalization_const(leaver_solution, s, l, m;
+            analytic=normalization_convention == :analytic)
         coefficients_params = SpectralDecompositionInputParams(s, l, m, c, length(leaver_solution.coeffs))
         return SpinWeightedSpheroidalHarmonicFunction{T}(coefficients_params, leaver_solution.coeffs, Vector{Union{SpinWeightedSphericalHarmonicFunction, Nothing}}(), normalization, lambda, :leaver, nothing, leaver_solution, bits)
     end
@@ -244,7 +275,7 @@ function _spin_weighted_spheroidal_harmonic(::Type{T}, bits::Int, s::Int, l, m::
     if c isa Complex && !iszero(imag(c)) && selected_backend != :dense
         pair = continue_angular_mode(
             s, l, m, c; truncation_order=_complex_truncation_order(s, l, m, N, c))
-        return spin_weighted_spheroidal_harmonic(pair; method)
+        return spin_weighted_spheroidal_harmonic(pair; method, normalization=normalization_convention)
     end
     adaptive_pair = nothing
     if N == -1 && selected_backend != :dense && isreal(c)
@@ -259,8 +290,11 @@ function _spin_weighted_spheroidal_harmonic(::Type{T}, bits::Int, s::Int, l, m::
         _spectral_decomposition(c, s, l, m, N; backend=selected_backend)
     end
     N = length(coefficients)
+    if normalization_convention == :analytic
+        coefficients = _analytically_normalized(coefficients, s, l, m)
+    end
     coefficients_params = SpectralDecompositionInputParams(s, l, m, c, N)
-    normalization = 1 # the coefficients have unit norm, so that \int_{0}^{pi} |S(theta)|^2 sin(theta) d theta = 1/(2pi)
+    normalization = 1 # the coefficients have unit norm, so that \int_{0}^{pi} |S(theta)|^2 sin(theta) d theta = 1/(2pi) (or S^2, with the analytic normalization)
     lambda = angular_sep + c^2 - 2*m*c
 
     l_list = construct_all_l_in_matrix(coefficients_params.s, coefficients_params.m, coefficients_params.N)

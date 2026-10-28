@@ -1010,18 +1010,22 @@ function _overlap_phase_fixed(coefficients::AbstractVector, s::Int, l::Int, m::I
 end
 
 """
-    spin_weighted_spheroidal_harmonic(pair::AngularEigenpair; method="auto")
+    spin_weighted_spheroidal_harmonic(pair::AngularEigenpair; method="auto", normalization=:modulus)
 
 Build the harmonic from a continued eigenpair (see `continue_angular_mode` and `track_angular_mode`),
 in the floating-point type of the pair. `method` is `"auto"`, `"direct"`, `"jacobi"` or `"chebyshev"`.
 Like every harmonic, it is normalized with its modulus and its phase is fixed by making the overlap
-with the spherical harmonic `l` real and positive, whatever the phase of the pair.
+with the spherical harmonic `l` real and positive, whatever the phase of the pair. With
+`normalization=:analytic` it is instead normalized so that ∫S² dΩ = 1, the analytic continuation of
+real `c`; see `spin_weighted_spheroidal_harmonic(s, l, m, c)`.
 """
 function spin_weighted_spheroidal_harmonic(
     pair::AngularEigenpair{T};
     method="auto",
+    normalization=:modulus,
 ) where {T}
     formatted_method = _format_method_name(method)
+    analytic = _format_normalization(normalization) == :analytic
     # Leaver's method finds its own eigenpair, so it has no use for this one
     formatted_method == "leaver" && throw(ArgumentError(
         "A continued eigenpair is evaluated from its spherical-harmonic coefficients, so " *
@@ -1035,6 +1039,9 @@ function spin_weighted_spheroidal_harmonic(
             pair.s, pair.m, pair.matrix_size)
         normalization = one(real(eltype(pair.coefficients)))
         coefficients = _overlap_phase_fixed(pair.coefficients, pair.s, pair.l, pair.m)
+        if analytic
+            coefficients = _analytically_normalized(coefficients, pair.s, pair.l, pair.m)
+        end
         if formatted_method == "chebyshev"
             # The eigenpair supplies lambda, and through its coefficients the values at the equator
             S_half, dS_half = _spheroidal_equator_values(T,

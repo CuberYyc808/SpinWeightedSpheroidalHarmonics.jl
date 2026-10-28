@@ -41,15 +41,23 @@ Use `backend=:dense` with `spin_weighted_spheroidal_harmonic` or
 
 For complex `c` the harmonic is normalized with its modulus,
 ``\int_0^\pi |{}_s S_{\ell m}|^2 \sin\theta \, d\theta = 1/(2\pi)``, and every method fixes its overall
-phase by making the overlap with ``{}_s Y_{\ell m}`` real and positive. To compare with the Mathematica
-package of the Black Hole Perturbation Toolkit, which normalizes ``S^2`` without the complex conjugate,
-divide by ``\sqrt{\sum_{\ell'} b_{\ell'}^2}``, where ``b_{\ell'}`` are the spherical-harmonic coefficients
-(up to the sign of the square root):
+phase by making the overlap with ``{}_s Y_{\ell m}`` real and positive. Because of the complex
+conjugate, the normalization constant, and with it the harmonic, is not an analytic function of `c`.
+
+With `normalization=:analytic` the harmonic is instead normalized with
+``\int_0^\pi \left[{}_s S_{\ell m}(\theta, 0)\right]^2 \sin\theta \, d\theta = 1/(2\pi)``, without the
+complex conjugate, as the Mathematica package of the Black Hole Perturbation Toolkit does. The harmonic
+is then the analytic continuation in `c` of the harmonic for real `c`, with its overlap with
+``{}_s Y_{\ell m}`` the continuation of a positive number (no longer real). Use it for quasinormal-mode
+residues and anything else that continues the harmonic to complex ``c = a\omega``:
 
 ```julia
-S = spin_weighted_spheroidal_harmonic(-2, 2, 2, 0.5 - 0.5im)
-S_bhpt(theta, phi) = S(theta, phi) / sqrt(sum(b^2 for b in S.coeffs))
+S = spin_weighted_spheroidal_harmonic(-2, 2, 2, 0.5 - 0.5im; normalization=:analytic)
+S = spin_weighted_spheroidal_harmonic(pair; normalization=:analytic)  # for a continued eigenpair
 ```
+
+The two normalizations agree for real `c`, and the eigenvalue does not depend on the normalization.
+The default stays `normalization=:modulus`.
 
 ## Functions
 ```@docs

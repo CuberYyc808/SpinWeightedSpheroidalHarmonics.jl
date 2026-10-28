@@ -23,7 +23,7 @@ For complex spheroidicity the harmonic is normalized with its modulus,
 ```math
     \int_0^{\pi} \left| {}_{s} S_{\ell m}(\theta; c) \right|^{2} \sin(\theta) \, d\theta = \frac{1}{2\pi} \; ,
 ```
-and every method fixes its overall phase by making the overlap with $`{}_{s} Y_{\ell m}`$ real and positive. The Mathematica package normalizes the square without the complex conjugate, as in the real case above; its harmonic is this one divided by $`\sqrt{\sum_{\ell'} b_{\ell'}^2}`$, where $`b_{\ell'}`$ are the spherical-harmonic coefficients (`swsh.coeffs` of a spectral harmonic), up to the sign of the square root.
+and every method fixes its overall phase by making the overlap with $`{}_{s} Y_{\ell m}`$ real and positive. This normalization is not an analytic function of $`c`$, because of the complex conjugate. With `normalization=:analytic` the harmonic is instead normalized as in the real case above, with the square and without the complex conjugate, as the Mathematica package does; it is then the analytic continuation of the harmonic for real $`c`$, which is what quasinormal-mode residues (complex $`c = a\omega`$) need. The eigenvalue is the same for both, and so is the harmonic for real $`c`$.
 
 Additionally, we provide two similar functions
 - `spin_weighted_spherical_harmonic` $`\,{}_{s} Y_{\ell m}(\theta, \phi)`$, and
