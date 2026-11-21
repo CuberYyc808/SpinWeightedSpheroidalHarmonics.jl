@@ -37,6 +37,9 @@ using Test
     @test all(three .≈ (S(1.1, 0.3), S(1.1, 0.3; theta_derivative=1), S(1.1, 0.3; theta_derivative=2)))
     @test spin_weighted_spheroidal_eigenvalue(S) === Float64(S.lambda)
     @test angular_parameters(Sc) === (s=-2, l=2, m=2, c=c)
+    basis = spin_weighted_spheroidal_basis(-2, 2, 0.35; lmax=6)
+    @test spin_weighted_spheroidal_eigenvalue(basis, 2) ≈ λ rtol=1e-14
+    @test spin_weighted_spheroidal_harmonic(basis, 3)(1.1, 0.3) ≈ spin_weighted_spheroidal_harmonic(-2, 3, 2, 0.35)(1.1, 0.3) rtol=1e-13
 
     λbig = spin_weighted_spheroidal_eigenvalue(-2, 2, 2, 7//20; precision=128)
     @test λbig isa BigFloat && precision(λbig) == 128

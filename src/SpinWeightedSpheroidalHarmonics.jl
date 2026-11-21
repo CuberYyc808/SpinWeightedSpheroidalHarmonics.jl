@@ -20,6 +20,7 @@ export value_and_theta_derivative
 export angular_eigenvalue_derivative
 export value_and_theta_derivatives, value_and_theta_derivatives!
 export angular_parameters
+export SpinWeightedSpheroidalBasis, spin_weighted_spheroidal_basis
 
 # Spherical harmonics whose coefficient is below this in magnitude are left out when the spheroidal
 # harmonic is built and evaluated
@@ -590,5 +591,6 @@ end
 include("eigenvalue_derivative.jl")
 include("theta_derivatives.jl")
 include("accessors.jl")
+include("basis.jl")
 
 end

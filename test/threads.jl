@@ -79,4 +79,18 @@ end
         tasks = [Threads.@spawn collect(value_and_theta_derivatives(S, θ, 0.3)) for θ in angles]
         @test all(same.(fetch.(tasks), collect.(serial)))
     end
+
+    # one basis read by several tasks at once: the modes it holds, and the harmonics built from it
+    basis = spin_weighted_spheroidal_basis(-2, 2, 3.0; lmax=24)
+    serial = [Any[spin_weighted_spheroidal_eigenvalue(basis, l); spin_weighted_spheroidal_harmonic(basis, l)(0.7, 0.2)]
+        for l in 2:24]
+    tasks = [Threads.@spawn Any[spin_weighted_spheroidal_eigenvalue(basis, l); spin_weighted_spheroidal_harmonic(basis, l)(0.7, 0.2)]
+        for l in 2:24]
+    @test all(same.(fetch.(tasks), serial))
+    # and extended by several tasks at once: each mode is prepared once, and agrees with the single-l call
+    basis = spin_weighted_spheroidal_basis(-2, 2, 3.0; lmax=4)
+    ls = 5:60
+    values = fetch.([Threads.@spawn spin_weighted_spheroidal_eigenvalue(basis, l) for l in ls])
+    @test values == [spin_weighted_spheroidal_eigenvalue(basis, l) for l in ls]
+    @test all(isapprox.(values, [spin_weighted_spheroidal_eigenvalue(-2, l, 2, 3.0) for l in ls]; rtol=4e-15))
 end
