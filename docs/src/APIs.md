@@ -6,6 +6,8 @@ The main functions are
 - [`spin_weighted_spherical_eigenvalue`](@ref)
 - [`spin_weighted_spherical_harmonic`](@ref)
 - [`value_and_theta_derivative`](@ref), which evaluates a harmonic and its ``\theta``-derivative in one pass
+- [`value_and_theta_derivatives`](@ref) and [`value_and_theta_derivatives!`](@ref), the same with the second
+  ``\theta``-derivative too
 - [`angular_eigenvalue_derivative`](@ref), the derivative ``d\lambda/dc`` of the eigenvalue
 
 and their return types use
@@ -75,6 +77,11 @@ SpinWeightedSpheroidalHarmonics.SpinWeightedSpheroidalHarmonicFunction
 
 ```@docs
 value_and_theta_derivative
+```
+
+```@docs
+value_and_theta_derivatives
+value_and_theta_derivatives!
 ```
 
 ```@docs

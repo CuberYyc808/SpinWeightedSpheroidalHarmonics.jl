@@ -70,4 +70,13 @@ end
     cs = [0.1im * k + 0.05 for k in 1:8]
     serial = [continue_angular_mode(-2, 2, 2, c; cache=nothing).lambda for c in cs]
     @test fetch.([Threads.@spawn continue_angular_mode(-2, 2, 2, c).lambda for c in cs]) == serial
+
+    # one harmonic evaluated by several tasks at once, with the one-pass value and two derivatives
+    for S in (spin_weighted_spheroidal_harmonic(-2, 6, 1, 2.5), spin_weighted_spheroidal_harmonic(-2, 6, 1, 2.5 - 1im),
+            spin_weighted_spheroidal_harmonic(-2, 4, 1, 1//2; precision=256))
+        angles = range(0.0, π; length=40)
+        serial = [value_and_theta_derivatives(S, θ, 0.3) for θ in angles]
+        tasks = [Threads.@spawn collect(value_and_theta_derivatives(S, θ, 0.3)) for θ in angles]
+        @test all(same.(fetch.(tasks), collect.(serial)))
+    end
 end
