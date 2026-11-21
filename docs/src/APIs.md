@@ -9,6 +9,8 @@ The main functions are
 - [`value_and_theta_derivatives`](@ref) and [`value_and_theta_derivatives!`](@ref), the same with the second
   ``\theta``-derivative too
 - [`angular_eigenvalue_derivative`](@ref), the derivative ``d\lambda/dc`` of the eigenvalue
+- [`angular_parameters`](@ref) and the one-argument methods of `spin_weighted_spheroidal_eigenvalue` and
+  `spin_weighted_spherical_eigenvalue`, the typed parameters and eigenvalue of a harmonic
 
 and their return types use
 - [SpectralDecompositionInputParams](@ref)
@@ -86,6 +88,10 @@ value_and_theta_derivatives!
 
 ```@docs
 angular_eigenvalue_derivative
+```
+
+```@docs
+angular_parameters
 ```
 
 ```@docs

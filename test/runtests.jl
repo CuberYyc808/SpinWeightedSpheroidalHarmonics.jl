@@ -35,6 +35,8 @@ using Test
     @test angular_eigenvalue_derivative(continue_angular_mode(-2, 2, 2, c)) isa ComplexF64
     three = value_and_theta_derivatives(S, 1.1, 0.3)
     @test all(three .≈ (S(1.1, 0.3), S(1.1, 0.3; theta_derivative=1), S(1.1, 0.3; theta_derivative=2)))
+    @test spin_weighted_spheroidal_eigenvalue(S) === Float64(S.lambda)
+    @test angular_parameters(Sc) === (s=-2, l=2, m=2, c=c)
 
     λbig = spin_weighted_spheroidal_eigenvalue(-2, 2, 2, 7//20; precision=128)
     @test λbig isa BigFloat && precision(λbig) == 128

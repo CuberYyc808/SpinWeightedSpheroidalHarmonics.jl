@@ -681,5 +681,6 @@ end
 
 include("eigenvalue_derivative.jl")
 include("theta_derivatives.jl")
+include("accessors.jl")
 include("precision.jl")
 include("threads.jl")
