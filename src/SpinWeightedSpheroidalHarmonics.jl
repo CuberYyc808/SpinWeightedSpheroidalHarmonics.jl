@@ -17,6 +17,7 @@ export continue_angular_lateral_pair, mirror_angular_parameters
 export angular_mirror_residual, angular_precision_certificate
 export angular_observables
 export value_and_theta_derivative
+export angular_eigenvalue_derivative
 
 # Spherical harmonics whose coefficient is below this in magnitude are left out when the spheroidal
 # harmonic is built and evaluated
@@ -583,5 +584,7 @@ function spin_weighted_spherical_eigenvalue(s::Int, l::Int, m::Int=0)
     eigenvalue_Schwarzschild(s, l)
 end
 
+
+include("eigenvalue_derivative.jl")
 
 end

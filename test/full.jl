@@ -679,5 +679,6 @@ end
     @test (@allocated evaluate(S)) == 0
 end
 
+include("eigenvalue_derivative.jl")
 include("precision.jl")
 include("threads.jl")
