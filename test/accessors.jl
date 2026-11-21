@@ -1,5 +1,5 @@
-# The typed accessors of a harmonic and an eigenpair.
-using SpinWeightedSpheroidalHarmonics, Test
+# The typed accessors of a harmonic and an eigenpair, and the documented guarantee of a BigFloat eigenpair.
+using SpinWeightedSpheroidalHarmonics, LinearAlgebra, Test
 
 @testset "Typed accessors" begin
     S = spin_weighted_spheroidal_harmonic(-2, 3, 1, 0.7)
@@ -28,4 +28,18 @@ using SpinWeightedSpheroidalHarmonics, Test
     # inferred
     @test (@inferred spin_weighted_spheroidal_eigenvalue(pair)) isa ComplexF64
     @test (@inferred angular_parameters(Y)) isa NamedTuple
+end
+
+@testset "The guarantee of a BigFloat eigenpair" begin
+    # coefficients of unit norm, residual at the roundoff level (far below the documented bound), an accepted status
+    for (s, l, m, c) in ((-2, 2, 2, 1 - 4im), (-2, 5, -3, 3//10 - 2im//5), (0, 4, 1, 6 - 1im), (2, 7, 0, 12 - 3im))
+        pair = continue_angular_mode(s, l, m, c; precision=256)
+        T = BigFloat
+        setprecision(BigFloat, 256) do
+            @test abs(sum(abs2, pair.coefficients) - 1) <= 10eps(T)
+            @test pair.residual <= 16 * sqrt(pair.matrix_size) * eps(T)
+            @test pair.residual <= SpinWeightedSpheroidalHarmonics._tol(T, 5e-12)
+        end
+        @test pair.status in (:spherical_anchor, :predictor_corrected, :continued, :banded, :precision_tracked, :near_collision)
+    end
 end

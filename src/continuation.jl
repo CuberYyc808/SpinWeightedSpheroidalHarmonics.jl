@@ -32,7 +32,7 @@ struct AngularCacheKey{T<:AbstractFloat}
     options::NamedTuple # the continuation keywords, which the continued mode also depends on
 end
 
-"""
+@doc raw"""
     AngularEigenpair{T}
 
 A spin-weighted spheroidal eigenpair at a complex spheroidicity, as returned by
@@ -49,6 +49,32 @@ larger than the runner-up's), `spectral_gap` (relative distance to the nearest o
 (Newton step), `:continued` (dense eigendecomposition), `:banded`, `:precision_tracked` (a step taken
 in the working precision where Float64 cannot resolve the mode) or `:near_collision` (accepted, but
 close to another eigenvalue or to an exceptional point).
+
+# What a caller may rely on
+
+Every eigenpair that `continue_angular_mode` and `track_angular_mode` return has been accepted: a
+step that fails the tests below is retried with a smaller step, and when that does not help an
+`AngularContinuationError` is thrown, so no rejected state is ever returned. In particular, in any
+working precision `T` (Float64, or `BigFloat` at `precision_bits`):
+
+- `coefficients` have unit Euclidean norm, `sum(abs2, coefficients) == 1` to roundoff in `T`; the
+  phase is that of the continuation along the path (not the phase convention of a harmonic);
+- `residual` is the relative residual ``\lVert M v - \lambda v \rVert / ((\lVert M \rVert_\infty + |\lambda|)
+  \lVert v \rVert)`` of the truncated spectral matrix ``M`` (of size `matrix_size`) at `c`. In Float64 it
+  is at most `residual_tol` (by default `5e-12`, about ``2 \times 10^4`` eps). In a wider `T` every
+  state is refined (or, where Float64 cannot follow the mode, computed) at its own `c` by Rayleigh
+  quotient iteration, which stops once the residual is
+  below ``16 \sqrt{N}`` eps(`T`) (``N`` = `matrix_size`), and the state is accepted only with a
+  residual of at most `residual_tol^(log eps(T) / log eps(Float64))` (about ``10^{-55}`` at 256 bits,
+  which is ``10^{22}`` eps); in practice it ends at the roundoff level, a few eps(`T`);
+- `status` takes the values listed above, all of which mean "accepted". `:near_collision` is
+  accepted too, but the relative gap to another eigenvalue is below ``\sqrt{\text{eps}}`` (in Float64)
+  or `eigenvector_condition` exceeds ``10^4``, so the eigenvector is less well determined than the
+  eigenvalue there.
+
+The eigenvalue and eigenvector are those of the truncated matrix; the truncation (`truncation_order`)
+is chosen so that the neglected coefficients are below about `1e-14` in Float64 (scaled to `T` in the
+same way), an estimate that is not checked afterwards. Pass a larger `truncation_order` to check it.
 """
 struct AngularEigenpair{T<:AbstractFloat}
     s::Int
@@ -789,6 +815,11 @@ takes the remaining keyword arguments) and return its `AngularEigenpair` at `c`.
 computed in the floating-point type of `c` (at least Float64), or in BigFloat at `precision` bits.
 Results are kept in `cache` (pass `nothing` to bypass it), keyed by everything they depend on:
 the mode, `c`, its type and precision, the truncation, the backend and the keyword arguments.
+
+In `BigFloat` (a `Complex{BigFloat}` `c`, or `precision = bits`) the eigenpair is computed in that
+precision, and it can be used as it is: see "What a caller may rely on" in [`AngularEigenpair`](@ref)
+for the norm of `coefficients`, the bound on `residual` and the meaning of `status`. No further
+refinement (for instance a Newton iteration on the dense matrix) is needed.
 """
 function continue_angular_mode(
     s::Int,
@@ -921,6 +952,13 @@ function _refine_angular_pair(seed::AngularEigenpair{Float64}, c::Complex{T}, pr
     band = _spectral_band(c, seed.s, seed.m, seed.matrix_size)
     lambda, coefficients, residual = _rayleigh_quotient_iteration(
         band, Complex{T}(seed.lambda), Complex{T}.(seed.coefficients))
+    # The bound stated in the docstring of AngularEigenpair; the iteration normally ends far below it,
+    # at roundoff
+    residual <= _tol(T, SWSH_DEFAULT_RESIDUAL_TOL) || throw(AngularContinuationError(
+        "SWSH eigenpair refinement in $(_precision_name(T)) did not converge at c = $(ComplexF64(c)) " *
+        "(relative residual $(Float64(residual))).",
+        ComplexF64(c), ComplexF64(c), NaN, NaN, Float64(residual), seed.spectral_gap,
+        seed.eigenvector_condition))
     coefficients = coefficients / norm(coefficients)
     phase, _ = _phase_align!(coefficients, something(previous, Complex{T}.(seed.coefficients)))
     angular_sep = lambda - (c^2 - 2seed.m * c)
