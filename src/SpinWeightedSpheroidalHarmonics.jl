@@ -554,6 +554,18 @@ for backward compatibility.
 The eigenvalue is computed in the floating-point type of `c` (at least Float64), or in BigFloat at
 `precision` bits.
 """
+#=
+The call with real Float64 c and no keyword argument, the most frequent one, skips the handling of the
+keywords (the method name, the precision scope), which costs more than a small solve; it computes
+exactly what the general method computes for it.
+=#
+function spin_weighted_spheroidal_eigenvalue(s::Int, l::Int, m::Int, c::Float64)
+    lmin = max(abs(s), abs(m))
+    l >= lmin || throw(ArgumentError(
+        "l = $l is below the lowest mode l = max(|s|, |m|) = $lmin for s = $s, m = $m."))
+    return Teukolsky_lambda_const(c, s, l, m, -1)
+end
+
 function spin_weighted_spheroidal_eigenvalue(s::Int, l, m::Int, c; N::Int=-1, method="auto",
     branch_n::Union{Nothing, Int}=nothing, lambda0=nothing, cf_depth::Int=-1, tol=-1, max_iter::Int=80,
     precision::Union{Nothing, Integer}=nothing)
