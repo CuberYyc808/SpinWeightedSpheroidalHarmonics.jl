@@ -4,6 +4,7 @@
 # or with Pkg.test(test_args=["full"]); run it with several threads (JULIA_NUM_THREADS) to exercise
 # concurrent use.
 using SpinWeightedSpheroidalHarmonics
+using LinearAlgebra
 using Test
 
 @testset "SpinWeightedSpheroidalHarmonics.jl" begin
@@ -40,6 +41,21 @@ using Test
     basis = spin_weighted_spheroidal_basis(-2, 2, 0.35; lmax=6)
     @test spin_weighted_spheroidal_eigenvalue(basis, 2) ≈ λ rtol=1e-14
     @test spin_weighted_spheroidal_harmonic(basis, 3)(1.1, 0.3) ≈ spin_weighted_spheroidal_harmonic(-2, 3, 2, 0.35)(1.1, 0.3) rtol=1e-13
+
+    # The angular spectral matrix M(c) = M0 + c M1 + c^2 M2: its eigenvalue nearest the spherical one is the
+    # separation constant A = λ - c^2 + 2mc, and the polynomial is the matrix built internally
+    for s in -2:2, m in -3:3, N in (20, 40), c in (0.7, 0.3 - 0.2im)
+        M0, M1, M2 = angular_spectral_matrix_coefficients(s, m, N)
+        M = M0 + c * M1 + c^2 * M2
+        @test M ≈ SpinWeightedSpheroidalHarmonics.construct_spectral_matrix(c, s, m, N) rtol=0 atol=4eps(maximum(abs, M))
+        values = eigvals(M)
+        for l in (max(abs(s), abs(m)), max(abs(s), abs(m)) + 2)
+            A = spin_weighted_spheroidal_eigenvalue(s, l, m, c) - c^2 + 2m * c
+            nearest = values[argmin(abs.(values .- (l * (l + 1) - s * (s + 1))))]
+            @test abs(nearest - A) <= 1e-12 * abs(A)
+        end
+    end
+    @test eltype(first(setprecision(() -> angular_spectral_matrix_coefficients(BigFloat, -2, 2, 6), BigFloat, 256))) == BigFloat
 
     λbig = spin_weighted_spheroidal_eigenvalue(-2, 2, 2, 7//20; precision=128)
     @test λbig isa BigFloat && precision(λbig) == 128

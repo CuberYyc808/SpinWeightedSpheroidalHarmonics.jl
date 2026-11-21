@@ -21,6 +21,7 @@ export angular_eigenvalue_derivative
 export value_and_theta_derivatives, value_and_theta_derivatives!
 export angular_parameters
 export SpinWeightedSpheroidalBasis, spin_weighted_spheroidal_basis
+export angular_spectral_matrix_coefficients
 
 # Spherical harmonics whose coefficient is below this in magnitude are left out when the spheroidal
 # harmonic is built and evaluated

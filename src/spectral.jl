@@ -197,6 +197,67 @@ function construct_spectral_matrix(c, s::Int, m::Int, N::Int)
     spectral_matrix = Array(Symmetric(spectral_matrix))
 end
 
+@doc raw"""
+    angular_spectral_matrix_coefficients([T=Float64,] s::Int, m::Int, N::Int)
+
+The angular spectral matrix ``M(c)`` of spin weight `s` and azimuthal index `m`, truncated to `N`
+spin-weighted spherical harmonics, as the polynomial in the spheroidicity `c`
+```math
+M(c) = M_0 + c\, M_1 + c^2 M_2 ,
+```
+returned as the tuple `(M0, M1, M2)` of dense `N × N` matrices, from their closed-form entries (no
+differencing in `c`). This is the matrix whose eigenpairs the spectral decomposition of this package
+solves for.
+
+- Index convention: row and column `i` correspond to the spin-weighted spherical harmonic
+  ``\ell = \max(|s|, |m|) + i - 1``, `i = 1, ..., N`. The matrix is pentadiagonal (it couples
+  ``\ell`` to ``\ell \pm 1`` and ``\ell \pm 2``).
+- Eigenvalue convention: the eigenvalues of ``M(c)`` are the angular separation constants ``A``
+  (Leaver's convention; the field `angular_sep` of an [`AngularEigenpair`](@ref)), so that the
+  eigenvalue of `spin_weighted_spheroidal_eigenvalue` is ``\lambda = A + c^2 - 2mc``; at `c = 0` they
+  are ``\ell(\ell + 1) - s(s + 1)``. The truncated matrix gives the eigenvalue of mode ``\ell``
+  accurately once `N` covers that mode and the harmonics beyond it that it needs.
+- Symmetry: `M0`, `M1` and `M2` are real symmetric, so ``M(c)`` is real symmetric for real `c` and
+  complex symmetric, ``M^T = M``, not Hermitian, for complex `c`: its left eigenvectors are the
+  transposes of the right ones, and products of eigenvectors are unconjugated, ``v^T M v / v^T v``.
+- Element type: the three matrices are `Matrix{T}`, with `T` a real floating-point type (`Float64` by
+  default; a `BigFloat` entry is computed at the current `BigFloat` precision, see `setprecision`).
+  ``M(c)`` is then real (`T`, or the promotion of `T` with the type of a real `c`) for real `c` and
+  `Complex` for complex `c`; for `BigFloat` pass `T = BigFloat` and a `BigFloat` `c`.
+
+`M0 + c * M1 + c^2 * M2` agrees with the matrix the package builds internally at `c` to rounding.
+
+# Example
+```julia
+M0, M1, M2 = angular_spectral_matrix_coefficients(-2, 2, 20)
+c = 0.3 - 0.2im
+A = eigvals(M0 + c * M1 + c^2 * M2)      # needs LinearAlgebra
+```
+"""
+function angular_spectral_matrix_coefficients(::Type{T}, s::Int, m::Int, N::Int) where {T<:AbstractFloat}
+    N >= 1 || throw(ArgumentError("N must be at least 1, got N = $N."))
+    lmin = max(abs(m), abs(s))
+    M0, M1, M2 = (zeros(T, N, N) for _ in 1:3)
+    for i in 1:N
+        l = lmin + i - 1
+        # the entries of spectral_matrix_coefficient, as polynomials in c
+        M0[i, i] = eigenvalue_Schwarzschild(s, l)
+        M1[i, i] = 2s * Hslm(T, s, l, m)
+        M2[i, i] = -Bslm(T, s, l, m)
+        if i + 1 <= N
+            M1[i, i + 1] = M1[i + 1, i] = 2s * Gslm(T, s, l + 1, m)
+            M2[i, i + 1] = M2[i + 1, i] = -Eslm(T, s, l + 1, m)
+        end
+        if i + 2 <= N
+            M2[i, i + 2] = M2[i + 2, i] = -Cslm(T, s, l + 2, m)
+        end
+    end
+    return M0, M1, M2
+end
+
+angular_spectral_matrix_coefficients(s::Int, m::Int, N::Int) =
+    angular_spectral_matrix_coefficients(Float64, s, m, N)
+
 # The spectral matrix in upper band storage, band[3 + i - j, j] = M[i, j], for real or complex c
 function _spectral_band(c, s::Int, m::Int, N::Int)
     T = _float_type(c)

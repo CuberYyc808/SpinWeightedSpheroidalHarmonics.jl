@@ -10,6 +10,7 @@ The main functions are
   ``\theta``-derivative too
 - [`angular_eigenvalue_derivative`](@ref), the derivative ``d\lambda/dc`` of the eigenvalue
 - [`spin_weighted_spheroidal_basis`](@ref), all the modes ``\ell`` of one ``(s, m, c)`` from one decomposition
+- [`angular_spectral_matrix_coefficients`](@ref), the spectral matrix as a polynomial in ``c``
 - [`angular_parameters`](@ref) and the one-argument methods of `spin_weighted_spheroidal_eigenvalue` and
   `spin_weighted_spherical_eigenvalue`, the typed parameters and eigenvalue of a harmonic
 
@@ -93,6 +94,10 @@ angular_eigenvalue_derivative
 
 ```@docs
 angular_parameters
+```
+
+```@docs
+angular_spectral_matrix_coefficients
 ```
 
 ```@docs
